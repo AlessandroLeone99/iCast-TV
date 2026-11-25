@@ -1,0 +1,29 @@
+name: Publish iCast test APK
+on:
+  push:
+    branches: ['icast/publish-test']
+    paths: ['.github/workflows/publish-icast-test.yml']
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download successful build
+        uses: actions/download-artifact@v4
+        with:
+          name: iCast-TV-FireOS-test
+          run-id: 45588352074
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Publish experimental APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          test -f dist/app-debug.apk
+          mv dist/app-debug.apk dist/iCast-TV.apk
+          gh release create v0.0.36-icast.1 dist/iCast-TV.apk --target 12a66b312a0c67fef6e03bcb039e5899aacbc517 --prerelease --title "iCast TV 0.0.36-icast.1 (experimental)" --notes "Experimental debug build from the successful Fire OS test workflow. Not yet device-tested. Source and upstream license: tagged commit; see ICAST-TEST.md. No DRM support or universal codec guarantee."
