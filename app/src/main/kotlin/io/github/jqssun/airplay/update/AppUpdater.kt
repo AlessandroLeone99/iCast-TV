@@ -39,7 +39,7 @@ class AppUpdater(private val app: Application, private val scope: CoroutineScope
     val state = _state.asStateFlow()
     private var job: Job? = null
     private val apk = File(app.cacheDir, "icast-update.apk")
-    private val partial = File(app.cacheDir, "icast-update.part")
+    private val partial = File(app.cacheDir, "icast-update.part.apk")
 
     fun check(automatic: Boolean = false) {
         if (job?.isActive == true) return
@@ -79,6 +79,7 @@ class AppUpdater(private val app: Application, private val scope: CoroutineScope
                                     ensureActive()
                                     val n = input.read(buffer)
                                     if (n < 0) break
+                                    ensureActive()
                                     total += n
                                     require(total <= release.size && total <= MAX_APK)
                                     digest.update(buffer, 0, n)
