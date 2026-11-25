@@ -1,50 +1,36 @@
-name: Generate APK
-
-env:
-  main_project_module: app
+name: iCast TV - Fire OS test APK
 
 on:
   push:
     branches:
-      - "release/**"
-    tags:
-      - "v*.*.*"
+      - 'icast/fireos-test'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-
-      - name: Set TAG
-        run: |
-          echo "version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' ${{ env.main_project_module }}/build.gradle.kts)" >> $GITHUB_ENV
-
-      - name: Use JDK
-        uses: actions/setup-java@v6
+          persist-credentials: false
+      - uses: actions/setup-java@v6
         with:
-          distribution: "zulu"
-          java-version: "21"
-          cache: "gradle"
-
-      - name: Build
+          distribution: zulu
+          java-version: '21'
+          cache: gradle
+      - name: Build test APK
         run: |
-          export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
-          echo ${{ secrets.STORE }} | base64 -d > upload.jks
-          echo ${{ secrets.LOCAL }} | base64 -d > local.properties
-          chmod +x ./gradlew;
-          ./gradlew assembleRelease bundleRelease --stacktrace
-          rm upload.jks local.properties
-
-      - name: Publish (GitHub)
-        uses: softprops/action-gh-release@v3
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+      - name: Upload private test artifact
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: v${{ env.version }}
-          tag_name: v${{ env.version }}
-          files: |
-            ${{ env.main_project_module }}/build/outputs/apk/release/app-release.apk
-            ${{ env.main_project_module }}/build/outputs/bundle/release/app-release.aab
+          name: iCast-TV-FireOS-test
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

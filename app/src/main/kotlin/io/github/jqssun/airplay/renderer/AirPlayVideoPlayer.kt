@@ -1,6 +1,7 @@
 package io.github.jqssun.airplay.renderer
 
 import android.content.Context
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -12,6 +13,15 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.VideoSize
+import androidx.media3.common.Tracks
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
+import java.io.IOException
 import androidx.media3.exoplayer.ExoPlayer
 
 // rate is 0 while buffering; speed is the configured rate regardless of pause state
@@ -28,6 +38,7 @@ data class PlaybackSnapshot(
 )
 
 // exoplayer calls stay on the main thread; native only reads the onPlaybackInfo snapshot
+@androidx.annotation.OptIn(UnstableApi::class)
 class AirPlayVideoPlayer(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -39,6 +50,38 @@ class AirPlayVideoPlayer(private val context: Context) {
     var onVideoSize: ((width: Int, height: Int, aspect: Float) -> Unit)? = null
     var onTitle: ((String?) -> Unit)? = null
     var onEnded: (() -> Unit)? = null
+    var onDiagnostic: ((String) -> Unit)? = null
+
+    private fun diagnostic(message: String) {
+        Log.i(TAG, message)
+        onDiagnostic?.invoke(message)
+    }
+
+    // Do not log exception messages, request URLs, cookies or response bodies:
+    // signed stream URLs can contain authentication tokens.
+    private fun describeCause(error: Throwable): String {
+        return generateSequence(error) { it.cause }
+            .take(8)
+            .joinToString(" -> ") { cause ->
+                if (cause is HttpDataSource.InvalidResponseCodeException) {
+                    "${cause.javaClass.simpleName}(HTTP ${cause.responseCode})"
+                } else {
+                    cause.javaClass.simpleName
+                }
+            }
+    }
+
+    private val loadDiagnostics = object : AnalyticsListener {
+        override fun onLoadError(
+            eventTime: AnalyticsListener.EventTime,
+            loadEventInfo: LoadEventInfo,
+            mediaLoadData: MediaLoadData,
+            error: IOException,
+            wasCanceled: Boolean,
+        ) {
+            diagnostic("[LOAD] type=${mediaLoadData.dataType} elapsed=${loadEventInfo.loadDurationMs}ms bytes=${loadEventInfo.bytesLoaded} canceled=$wasCanceled cause=${describeCause(error)}")
+        }
+    }
 
     private val _reportTick = object : Runnable {
         override fun run() {
@@ -48,12 +91,29 @@ class AirPlayVideoPlayer(private val context: Context) {
     }
 
     private val _listener = object : Player.Listener {
-        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            Log.w(TAG, "playback error", error)
+        override fun onPlayerError(error: PlaybackException) {
+            diagnostic("[ERROR] ${error.errorCodeName} (${error.errorCode}) cause=${describeCause(error)}")
             onEnded?.invoke()
         }
         override fun onPlaybackStateChanged(state: Int) {
+            val label = when (state) {
+                Player.STATE_IDLE -> "IDLE"
+                Player.STATE_BUFFERING -> "BUFFERING"
+                Player.STATE_READY -> "READY"
+                Player.STATE_ENDED -> "ENDED"
+                else -> state.toString()
+            }
+            diagnostic("[STATE] $label position=${player?.currentPosition ?: 0}ms buffered=${player?.bufferedPosition ?: 0}ms")
             if (state == Player.STATE_ENDED) onEnded?.invoke()
+        }
+        override fun onTracksChanged(tracks: Tracks) {
+            for (group in tracks.groups) {
+                for (index in 0 until group.length) {
+                    if (!group.isTrackSelected(index)) continue
+                    val format = group.getTrackFormat(index)
+                    diagnostic("[TRACK] mime=${format.sampleMimeType} codec=${format.codecs} size=${format.width}x${format.height} audio=${format.channelCount}ch")
+                }
+            }
         }
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
             // duration is usually established here (esp. hls): report so the held /play releases
@@ -72,8 +132,18 @@ class AirPlayVideoPlayer(private val context: Context) {
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
-        val p = ExoPlayer.Builder(context).build().also {
+        val uri = Uri.parse(location)
+        val scheme = when (uri.scheme) {
+            "http" -> "HTTP"
+            "https" -> "HTTPS"
+            else -> "other"
+        }
+        val local = uri.host == "localhost" || uri.host == "127.0.0.1" || uri.host == "::1"
+        diagnostic("[VIDEO] $scheme local=$local start=${startPositionSeconds}s")
+        val renderers = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
+        val p = ExoPlayer.Builder(context, renderers).build().also {
             it.addListener(_listener)
+            it.addAnalyticsListener(loadDiagnostics)
             pendingSurface?.let { s -> it.setVideoSurface(s) }
             it.volume = clientGain
         }
@@ -153,6 +223,7 @@ class AirPlayVideoPlayer(private val context: Context) {
         mainHandler.removeCallbacks(_reportTick)
         player?.let {
             it.removeListener(_listener)
+            it.removeAnalyticsListener(loadDiagnostics)
             it.release()
         }
         player = null

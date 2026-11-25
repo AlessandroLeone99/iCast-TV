@@ -201,8 +201,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         logCallback?.invoke(msg)
     }
 
+    // Native diagnostics may include signed URLs. Strip them from the UI/export.
     override fun onLog(msg: String) {
-        logCallback?.invoke(msg)
+        logCallback?.invoke(msg.replace(Regex("(?i)https?://[^\\s]+"), "[URL omitted]"))
     }
 
     inner class LocalBinder : Binder() {
@@ -310,6 +311,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _videoPlaybackSize.value = width to height
         }
         airPlayVideoPlayer.onTitle = { _videoTitle.value = it ?: "" }
+        airPlayVideoPlayer.onDiagnostic = { message -> log(message) }
         airPlayVideoPlayer.onEnded = { _endVideoPlayback("AirPlay Video stopped (player)") }
         airPlayVideoPlayer.onPlaybackInfo = { snapshot ->
             if (nativeHandle != 0L) {
@@ -663,7 +665,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         airPlayVideoPlayer.play(location, startPositionSeconds)
         // claim media-button routing for keys that arrive as media-session events
         mediaSession?.isActive = true
-        log("AirPlay Video play: $location @ ${startPositionSeconds}s")
+        log("AirPlay Video play @ ${startPositionSeconds}s")
     }
 
     override fun onVideoScrub(positionSeconds: Float) {

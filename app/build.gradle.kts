@@ -30,11 +30,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.jqssun.airplay"
+        applicationId = "io.github.jqssun.airplay.icast"
         minSdk = 23
         targetSdk = 37
-        versionCode = 36
-        versionName = "0.0.36"
+        versionCode = 37
+        versionName = "0.0.36-icast.1"
 
         externalNativeBuild {
             cmake {
@@ -121,6 +121,7 @@ dependencies {
     implementation(libs.androidx.media)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui.compose.material3)
     implementation(libs.media3.transformer)
     implementation(libs.kotlinx.coroutines)
