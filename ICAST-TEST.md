@@ -34,3 +34,7 @@ Not yet device-tested. DRM, browser-session-bound streams, hardware codec limits
 - Logs [SUB] report available text tracks, format/language/support/selection and first received cues, never the actual subtitle text.
 - In-stream WebVTT, supported embedded captions and subtitle renditions may work if Media3 receives them. Arbitrary external SRT files and browser-only subtitle overlays are not imported automatically.
 - Test: use authorized HLS with text renditions, switch languages, disable subtitles, resize, seek, pause, start a second video with no captions; confirm no stale captions and normal mirroring. Not yet device-tested.
+
+## Fire Stick ARM32 build (.5)
+- Debug and release APKs target only armeabi-v7a. The separate arm64 sanitizer variant is retained for development but is not built by the APK workflow.
+- CI verifies the native library ABI in the APK before publication. Superseded multi-ABI runs are cancelled where permissions allow. New pushes cancel older runs in the same branch concurrency group.

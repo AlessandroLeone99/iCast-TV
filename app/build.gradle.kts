@@ -11,7 +11,7 @@ val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
 }
 
-val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+val allAbis = listOf("armeabi-v7a")
 
 android {
     namespace = "io.github.jqssun.airplay"
@@ -33,8 +33,8 @@ android {
         applicationId = "io.github.jqssun.airplay.icast"
         minSdk = 23
         targetSdk = 37
-        versionCode = 40
-        versionName = "0.0.36-icast.4"
+        versionCode = 41
+        versionName = "0.0.36-icast.5"
 
         externalNativeBuild {
             cmake {
