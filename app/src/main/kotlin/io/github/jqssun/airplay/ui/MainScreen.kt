@@ -151,12 +151,19 @@ fun MainScreen(
 
     if (videoScreen) {
         val videoPlaybackAspect by viewModel.videoPlaybackAspect.collectAsState()
+        val subtitleCues by viewModel.subtitleCues.collectAsState()
+        val subtitleTracks by viewModel.subtitleTracks.collectAsState()
+        val subtitleScale by viewModel.subtitleScale.collectAsState()
         val playback: @Composable () -> Unit = {
-            VideoSurfaceView(
-                onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
-                onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
-                aspectRatio = videoPlaybackAspect
-            )
+            Box(Modifier.aspectRatio(videoPlaybackAspect, matchHeightConstraintsFirst = videoPlaybackAspect < 1f)) {
+                VideoSurfaceView(
+                    onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
+                    onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
+                    applyAspectRatio = false,
+                    modifier = Modifier.matchParentSize()
+                )
+                SubtitleOverlay(subtitleCues, subtitleScale, Modifier.matchParentSize())
+            }
         }
         if (isInPip) {
             Box(
@@ -231,15 +238,18 @@ fun MainScreen(
             context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
         }
         var showSpeedSelector by remember { mutableStateOf(false) }
-        BackHandler { viewModel.stopVideoPlayback() }
+        var showSubtitleSelector by remember { mutableStateOf(false) }
+        BackHandler {
+            if (showSubtitleSelector) showSubtitleSelector = false else viewModel.stopVideoPlayback()
+        }
 
         val rootFocusRequester = remember { FocusRequester() }
         val playPauseFocusRequester = remember { FocusRequester() }
         val unlockFocusRequester = remember { FocusRequester() }
         var isPlayPauseFocused by remember { mutableStateOf(false) }
         var isUnlockFocused by remember { mutableStateOf(false) }
-        LaunchedEffect(overlayVisible, controlsLocked, showSpeedSelector) {
-            if (showSpeedSelector) return@LaunchedEffect
+        LaunchedEffect(overlayVisible, controlsLocked, showSpeedSelector, showSubtitleSelector) {
+            if (showSpeedSelector || showSubtitleSelector) return@LaunchedEffect
             if (!overlayVisible) {
                 runCatching { rootFocusRequester.requestFocus() }
                 return@LaunchedEffect
@@ -275,7 +285,7 @@ fun MainScreen(
                 .focusRequester(rootFocusRequester)
                 .focusable()
                 .onPreviewKeyEvent { keyEvent ->
-                    if (showSpeedSelector) {
+                    if (showSpeedSelector || showSubtitleSelector) {
                         false
                     } else {
                         handlePlayerKeyEvent(
@@ -302,12 +312,15 @@ fun MainScreen(
                 contentScale = zoomState.contentScale,
                 zoom = zoomState.zoom
             ) { sizeModifier ->
-                VideoSurfaceView(
-                    onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
-                    onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
-                    applyAspectRatio = false,
-                    modifier = sizeModifier
-                )
+                Box(sizeModifier) {
+                    VideoSurfaceView(
+                        onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
+                        onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
+                        applyAspectRatio = false,
+                        modifier = Modifier.matchParentSize()
+                    )
+                    SubtitleOverlay(subtitleCues, subtitleScale, Modifier.matchParentSize())
+                }
             }
             VideoPlayerGestures(
                 enabled = videoPlaybackActive,
@@ -420,7 +433,8 @@ fun MainScreen(
                             overlayVisible = false
                             showSpeedSelector = true
                         },
-                        onDownloadClick = { viewModel.toggleVideoDownload() }
+                        onDownloadClick = { viewModel.toggleVideoDownload() },
+                        onSubtitleClick = { showSubtitleSelector = true }
                     )
                 }
                 androidx.compose.animation.AnimatedVisibility(
@@ -469,6 +483,22 @@ fun MainScreen(
                             )
                     )
                 }
+            }
+            if (showSubtitleSelector) {
+                SubtitleSelector(
+                    tracks = subtitleTracks,
+                    scale = subtitleScale,
+                    onSelect = { track, disabled ->
+                        viewModel.selectSubtitle(track, disabled)
+                        showSubtitleSelector = false
+                        viewModel.showVideoOverlay()
+                    },
+                    onScale = viewModel::setSubtitleScale,
+                    onDismiss = {
+                        showSubtitleSelector = false
+                        viewModel.showVideoOverlay()
+                    }
+                )
             }
             val skipSilence by viewModel.videoSkipSilence.collectAsState()
             PlaybackSpeedSelector(

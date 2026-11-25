@@ -9,6 +9,9 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
+import androidx.media3.common.text.Cue
+import io.github.jqssun.airplay.renderer.SubtitleTrack
+import kotlinx.coroutines.flow.collect
 import io.github.jqssun.airplay.Pref
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.audio.TrackInfo
@@ -81,6 +84,18 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val prefs = app.getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
     private val logFile = File(app.filesDir, "airplay_logs.txt")
     private var service: AirPlayService? = null
+    private var subtitleTrackJob: Job? = null
+    private var subtitleCueJob: Job? = null
+    private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
+    val subtitleTracks = _subtitleTracks.asStateFlow()
+    private val _subtitleCues = MutableStateFlow<List<Cue>>(emptyList())
+    val subtitleCues = _subtitleCues.asStateFlow()
+    private val _subtitleScale = MutableStateFlow(1f)
+    val subtitleScale = _subtitleScale.asStateFlow()
+    fun setSubtitleScale(scale: Float) { _subtitleScale.value = scale.coerceIn(0.75f, 1.5f) }
+    fun selectSubtitle(track: SubtitleTrack?, disabled: Boolean = false) {
+        service?.airPlayVideoPlayer?.selectSubtitle(track, disabled)
+    }
     val dacpPlayer: Player? get() = service?.dacpPlayer
 
     fun audioScanBegin(forward: Boolean) {
@@ -260,11 +275,23 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     // service binding
     fun bindService(svc: AirPlayService) {
+        subtitleTrackJob?.cancel()
+        subtitleCueJob?.cancel()
         service = svc
+        subtitleTrackJob = viewModelScope.launch {
+            svc.airPlayVideoPlayer.subtitleTracks.collect { _subtitleTracks.value = it }
+        }
+        subtitleCueJob = viewModelScope.launch {
+            svc.airPlayVideoPlayer.subtitleCues.collect { _subtitleCues.value = it }
+        }
         updateFromService()
     }
 
     fun unbindService() {
+        subtitleTrackJob?.cancel()
+        subtitleCueJob?.cancel()
+        _subtitleTracks.value = emptyList()
+        _subtitleCues.value = emptyList()
         service = null
     }
 

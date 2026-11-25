@@ -33,8 +33,8 @@ android {
         applicationId = "io.github.jqssun.airplay.icast"
         minSdk = 23
         targetSdk = 37
-        versionCode = 39
-        versionName = "0.0.36-icast.3"
+        versionCode = 40
+        versionName = "0.0.36-icast.4"
 
         externalNativeBuild {
             cmake {
@@ -123,6 +123,7 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui.compose.material3)
+    implementation(libs.media3.ui)
     implementation(libs.media3.transformer)
     implementation(libs.kotlinx.coroutines)
     implementation(libs.oboe)

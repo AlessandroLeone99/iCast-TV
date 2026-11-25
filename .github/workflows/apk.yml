@@ -44,4 +44,4 @@ jobs:
           set -eu
           version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
           cp app/build/outputs/apk/debug/app-debug.apk iCast-TV.apk
-          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (experimental)" --notes "Experimental debug build with filtered AirPlay protocol diagnostics. Not device-tested. See ICAST-TEST.md. Existing debug installs may need uninstalling if signing keys differ."
+          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (experimental)" --notes "Experimental debug build with AirPlay diagnostics and subtitle rendering (CC). Not device-tested. See ICAST-TEST.md. Existing debug installs may need uninstalling if signing keys differ."

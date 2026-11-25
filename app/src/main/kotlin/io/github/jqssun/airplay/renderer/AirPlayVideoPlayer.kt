@@ -14,6 +14,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.VideoSize
 import androidx.media3.common.Tracks
+import androidx.media3.common.TrackGroup
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
@@ -37,6 +43,15 @@ data class PlaybackSnapshot(
     val buffering: Boolean = false,
 )
 
+// One concrete text track from the current Media3 timeline.
+data class SubtitleTrack(
+    val group: TrackGroup,
+    val index: Int,
+    val label: String,
+    val supported: Boolean,
+    val selected: Boolean,
+)
+
 // exoplayer calls stay on the main thread; native only reads the onPlaybackInfo snapshot
 @androidx.annotation.OptIn(UnstableApi::class)
 class AirPlayVideoPlayer(private val context: Context) {
@@ -51,6 +66,58 @@ class AirPlayVideoPlayer(private val context: Context) {
     var onTitle: ((String?) -> Unit)? = null
     var onEnded: (() -> Unit)? = null
     var onDiagnostic: ((String) -> Unit)? = null
+
+    private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
+    val subtitleTracks = _subtitleTracks.asStateFlow()
+    private val _subtitleCues = MutableStateFlow<List<Cue>>(emptyList())
+    val subtitleCues = _subtitleCues.asStateFlow()
+    private var firstCueLogged = false
+
+    // A null track selects automatic Italian-preferred captions unless disabled.
+    fun selectSubtitle(track: SubtitleTrack?, disabled: Boolean = false) = mainHandler.post {
+        val p = player ?: return@post
+        if (track != null && p.currentTracks.groups.none {
+                it.mediaTrackGroup == track.group && it.type == C.TRACK_TYPE_TEXT &&
+                    track.index in 0 until it.length && it.isTrackSupported(track.index)
+            }) {
+            diagnostic("[SUB] requested track no longer available")
+            return@post
+        }
+        val builder = p.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, disabled)
+            .setPreferredTextLanguage("it")
+        if (track != null && !disabled) {
+            builder.setOverrideForType(TrackSelectionOverride(track.group, track.index))
+        }
+        _subtitleCues.value = emptyList()
+        firstCueLogged = false
+        p.trackSelectionParameters = builder.build()
+        diagnostic("[SUB] selection=" + when {
+            disabled -> "off"
+            track != null -> "manual"
+            else -> "auto"
+        })
+    }
+
+    private fun reportSubtitleTracks(tracks: Tracks) {
+        val found = mutableListOf<SubtitleTrack>()
+        for (group in tracks.groups) {
+            if (group.type != C.TRACK_TYPE_TEXT) continue
+            for (index in 0 until group.length) {
+                val format = group.getTrackFormat(index)
+                val language = format.language?.take(24)?.filter { it.isLetterOrDigit() || it == '-' }
+                val label = listOfNotNull(format.label?.take(80), language?.takeIf { it.isNotBlank() })
+                    .distinct().joinToString(" · ").ifBlank { "Track ${found.size + 1}" }
+                val supported = group.isTrackSupported(index)
+                val selected = group.isTrackSelected(index)
+                found.add(SubtitleTrack(group.mediaTrackGroup, index, label, supported, selected))
+                diagnostic("[SUB] track=${found.size} lang=${language ?: "und"} mime=${format.sampleMimeType} supported=$supported selected=$selected")
+            }
+        }
+        _subtitleTracks.value = found
+        if (found.isEmpty()) diagnostic("[SUB] no text tracks advertised by stream")
+    }
 
     private fun diagnostic(message: String) {
         Log.i(TAG, message)
@@ -107,12 +174,20 @@ class AirPlayVideoPlayer(private val context: Context) {
             if (state == Player.STATE_ENDED) onEnded?.invoke()
         }
         override fun onTracksChanged(tracks: Tracks) {
+            reportSubtitleTracks(tracks)
             for (group in tracks.groups) {
                 for (index in 0 until group.length) {
                     if (!group.isTrackSelected(index)) continue
                     val format = group.getTrackFormat(index)
                     diagnostic("[TRACK] mime=${format.sampleMimeType} codec=${format.codecs} size=${format.width}x${format.height} audio=${format.channelCount}ch")
                 }
+            }
+        }
+        override fun onCues(cueGroup: CueGroup) {
+            _subtitleCues.value = cueGroup.cues.toList()
+            if (cueGroup.cues.isNotEmpty() && !firstCueLogged) {
+                firstCueLogged = true
+                diagnostic("[SUB] first cues received count=${cueGroup.cues.size}")
             }
         }
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
@@ -148,6 +223,9 @@ class AirPlayVideoPlayer(private val context: Context) {
             it.volume = clientGain
         }
         player = p
+        p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+            .setPreferredTextLanguage("it")
+            .build()
         p.setMediaItem(MediaItem.fromUri(location), (startPositionSeconds * 1000).toLong())
         p.playWhenReady = true
         p.prepare()
@@ -227,6 +305,9 @@ class AirPlayVideoPlayer(private val context: Context) {
             it.release()
         }
         player = null
+        _subtitleTracks.value = emptyList()
+        _subtitleCues.value = emptyList()
+        firstCueLogged = false
         // duration=-1 is the "video finished" sentinel for the playback-info handler
         if (reportStopped) {
             onPlaybackInfo?.invoke(PlaybackSnapshot(0f, -1f, 0f, false, false))

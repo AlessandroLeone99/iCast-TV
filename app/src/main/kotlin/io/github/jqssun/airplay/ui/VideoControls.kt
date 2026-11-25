@@ -178,6 +178,7 @@ fun VideoControlsTop(
     onBackClick: () -> Unit,
     onSpeedClick: () -> Unit,
     onDownloadClick: () -> Unit,
+    onSubtitleClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val insets = WindowInsets.systemBars.union(WindowInsets.displayCutout).asPaddingValues()
@@ -211,6 +212,12 @@ fun VideoControlsTop(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            androidx.compose.material3.TextButton(
+                onClick = onSubtitleClick,
+                modifier = Modifier.focusRing()
+            ) {
+                Text("CC", color = Color.White, fontWeight = FontWeight.Bold)
+            }
             PlayerButton(onClick = onSpeedClick) {
                 Icon(Icons.Rounded.Speed, contentDescription = stringResource(R.string.select_playback_speed))
             }

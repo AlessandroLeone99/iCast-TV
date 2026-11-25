@@ -27,3 +27,10 @@ Not yet device-tested. DRM, browser-session-bound streams, hardware codec limits
 - SETUP stream types (110 = mirroring, 96 = audio) and mirror-running callbacks are logged. Routine polling is omitted to avoid flooding the UI.
 - Raw headers, URLs, payloads, keys and tokens are not included in these new entries. Other preexisting logs may still contain sensitive data.
 - Default receiver name is iCast TV; existing saved settings are unchanged. This diagnostic update does not claim to fix audio-only handover.
+
+## Subtitle support (.4)
+- Media3 SubtitleView renders timed text/bitmap cues on top of direct video. Mirroring is unchanged.
+- CC menu: automatic (Italian preferred), off, individual supported text tracks, three text sizes. The size is retained while the ViewModel lives; selection is per playback session.
+- Logs [SUB] report available text tracks, format/language/support/selection and first received cues, never the actual subtitle text.
+- In-stream WebVTT, supported embedded captions and subtitle renditions may work if Media3 receives them. Arbitrary external SRT files and browser-only subtitle overlays are not imported automatically.
+- Test: use authorized HLS with text renditions, switch languages, disable subtitles, resize, seek, pause, start a second video with no captions; confirm no stale captions and normal mirroring. Not yet device-tested.
