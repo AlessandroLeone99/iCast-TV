@@ -87,6 +87,9 @@ fun SettingsScreen(viewModel: MainViewModel) {
             .verticalScroll(rememberScrollState())
             .padding(vertical = 8.dp)
     ) {
+        SectionHeader("Aggiornamenti iCast TV")
+        UpdateSettings(viewModel)
+
         SectionHeader(stringResource(R.string.section_server))
 
         SettingTextField(

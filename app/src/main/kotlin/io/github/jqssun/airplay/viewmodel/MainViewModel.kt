@@ -81,6 +81,7 @@ data class DebugInfo(
 @HiltViewModel
 class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app) {
 
+    val updater = io.github.jqssun.airplay.update.AppUpdater(app, viewModelScope)
     private val prefs = app.getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
     private val logFile = File(app.filesDir, "airplay_logs.txt")
     private var service: AirPlayService? = null

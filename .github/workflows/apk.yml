@@ -1,45 +1,27 @@
-name: iCast TV - Fire OS test APK
-
+name: iCast TV - signed ARM32 APK
 on:
   push:
     branches:
       - 'icast/fireos-test'
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: icast-fireos-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  cancel_superseded:
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Cancel previous multi-ABI runs
-        if: github.ref == 'refs/heads/icast/fireos-test'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -eu
-          for id in 45595455573 45595928813; do
-            status=$(gh api "repos/$GH_REPO/actions/runs/$id" --jq .status)
-            if [ "$status" != completed ]; then
-              gh api --method POST "repos/$GH_REPO/actions/runs/$id/cancel" || echo "::warning::Cancellation request for $id was rejected; check Actions."
-            fi
-          done
   build:
-    needs: cancel_superseded
-    if: always() && !cancelled()
-    permissions:
-      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      - name: Check signing configuration
+        env:
+          ICAST_SIGNING_JSON: ${{ secrets.ICAST_SIGNING_JSON }}
+        run: |
+          if [ -z "$ICAST_SIGNING_JSON" ]; then
+            echo "::error::Configure repository Actions secret ICAST_SIGNING_JSON before building the signed APK."
+            exit 1
+          fi
       - uses: actions/checkout@v7
         with:
           submodules: recursive
@@ -49,35 +31,69 @@ jobs:
           distribution: zulu
           java-version: '21'
           cache: gradle
-      - name: Build test APK
+      - name: Build ARM32 APK
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
-      - name: Verify APK contains ARM32 only
+      - name: Sign and verify APK
+        env:
+          ICAST_SIGNING_JSON: ${{ secrets.ICAST_SIGNING_JSON }}
         run: |
           python3 - <<'PY'
-          import zipfile
-          path = 'app/build/outputs/apk/debug/app-debug.apk'
-          with zipfile.ZipFile(path) as apk:
+          import base64, json, os, pathlib, re, subprocess, tempfile, zipfile
+          source = 'app/build/outputs/apk/debug/app-debug.apk'
+          out = 'iCast-TV.apk'
+          with zipfile.ZipFile(source) as apk:
               abis = {p.split('/')[1] for p in apk.namelist() if p.startswith('lib/') and p.endswith('.so')}
-          print('Native ABIs:', sorted(abis))
           assert abis == {'armeabi-v7a'}, abis
+          secret = json.loads(os.environ.pop('ICAST_SIGNING_JSON'))
+          password = secret['password']
+          print('::add-mask::' + password)
+          sdk = pathlib.Path(os.environ['ANDROID_HOME'])
+          tools = sorted(sdk.glob('build-tools/*/apksigner'), reverse=True)
+          if not tools:
+              raise RuntimeError('apksigner unavailable')
+          signer = str(tools[0])
+          with tempfile.TemporaryDirectory() as temp:
+              keystore = pathlib.Path(temp) / 'icast.p12'
+              keystore.write_bytes(base64.b64decode(secret['keystore'], validate=True))
+              keystore.chmod(0o600)
+              env = dict(os.environ, ICAST_KEY_PASSWORD=password)
+              subprocess.run([signer, 'sign', '--ks', str(keystore), '--ks-type', 'PKCS12',
+                  '--ks-key-alias', 'icast', '--ks-pass', 'env:ICAST_KEY_PASSWORD',
+                  '--key-pass', 'env:ICAST_KEY_PASSWORD', '--min-sdk-version', '23',
+                  '--out', out, source], env=env, check=True)
+          report = subprocess.check_output([signer, 'verify', '--min-sdk-version', '23', '--print-certs', out], text=True)
+          expected = '0d2358cf22e2af9f42eb8cc3c7d61c650937bda9e049edf56f42cc92def1e707'
+          digests = re.findall(r'certificate SHA-256 digest:\s*([0-9a-fA-F]+)', report)
+          if [d.lower() for d in digests] != [expected]:
+              raise RuntimeError('APK signing certificate does not match the pinned iCast key')
+          print('ARM32 and signing certificate verified')
           PY
-      - name: Upload test artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: iCast-TV-FireOS-test
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: iCast-TV-signed-ARM32
+          path: iCast-TV.apk
           if-no-files-found: error
           retention-days: 14
-
-      - name: Publish diagnostic prerelease
-        if: github.ref == 'refs/heads/icast/fireos-test'
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/icast/fireos-test'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: iCast-TV-signed-ARM32
+      - name: Publish signed APK
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -eu
           version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
-          cp app/build/outputs/apk/debug/app-debug.apk iCast-TV.apk
-          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (experimental)" --notes "ARM32-only experimental debug build with AirPlay diagnostics and subtitle rendering (CC). Not device-tested. See ICAST-TEST.md. Existing debug installs may need uninstalling if signing keys differ."
+          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (ARM32)" --notes "Signed ARM32 experimental build with in-app updates, captions and diagnostics. First migration from temporary debug signing may require uninstalling the old iCast app. Not device-tested."

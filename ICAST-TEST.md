@@ -38,3 +38,10 @@ Not yet device-tested. DRM, browser-session-bound streams, hardware codec limits
 ## Fire Stick ARM32 build (.5)
 - Debug and release APKs target only armeabi-v7a. The separate arm64 sanitizer variant is retained for development but is not built by the APK workflow.
 - CI verifies the native library ABI in the APK before publication. Superseded multi-ABI runs are cancelled where permissions allow. New pushes cancel older runs in the same branch concurrency group.
+
+## In-app updates (.6)
+- The Settings section checks GitHub releases (including prereleases), lists a newer version, and downloads an APK only on user action. Startup checks can be disabled.
+- Downloads use HTTPS, bounded size, expected release SHA-256 when supplied, pinned iCast signing certificate, matching package and increasing Android version code before launching the Android installer. Installation requires user confirmation.
+- CI requires the repository Actions secret ICAST_SIGNING_JSON containing the PKCS12 keystore and password. Never commit or share that secret. The pinned public certificate SHA-256 is 0d2358cf22e2af9f42eb8cc3c7d61c650937bda9e049edf56f42cc92def1e707. No fallback to random debug signing is published.
+- Migration from previous ephemeral debug signing may require uninstalling iCast once; this clears its local settings/logs. Export logs first. Future updates signed with the same key can preserve data. Keep a private backup of the secret.
+- Validate on Fire OS 6: manual and startup checks, no update, available update, failed network, cancel, installer confirmation, same-key update, settings retained. No on-device verification yet.

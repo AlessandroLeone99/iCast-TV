@@ -75,6 +75,7 @@ object Prefs {
     val SERVER_NAME = str("server_name", "iCast TV", restart = true)
     val SERVER_PORT = int("server_port", 7200, 1..65535, restart = true)
     val AUTO_START = bool("auto_start", true)
+    val AUTO_CHECK_UPDATES = bool("auto_check_updates", true)
     val BOOT_AUTO_START = bool("boot_auto_start", true)
     val RUN_IN_BACKGROUND = bool("run_in_background", true)
     val H265 = tri("h265", restart = true)
