@@ -1,0 +1,56 @@
+diff --git a/lib/raop.c b/lib/raop.c
+--- a/lib/raop.c
++++ b/lib/raop.c
+@@ -219,7 +219,25 @@
+     if (!method  || !url || !protocol) {
+         return;
+     }
+ 
++    /* Fixed labels only: never include arbitrary sender URLs, headers or payloads.
++       LOGGER_ERR is used as a transport for these tagged events because the Android
++       bridge keeps verbose UxPlay logging disabled and routes the tag as INFO. */
++    const char *diagnostic_request = NULL;
++    if (!strcmp(protocol, "RTSP/1.0")) {
++        if (!strcmp(method, "SETUP")) diagnostic_request = "RTSP SETUP";
++        else if (!strcmp(method, "RECORD")) diagnostic_request = "RTSP RECORD";
++        else if (!strcmp(method, "TEARDOWN")) diagnostic_request = "RTSP TEARDOWN";
++    } else if (!strcmp(protocol, "HTTP/1.1")) {
++        if (!strcmp(url, "/server-info")) diagnostic_request = "HTTP /server-info";
++        else if (!strcmp(url, "/reverse")) diagnostic_request = "HTTP /reverse";
++        else if (!strcmp(url, "/play")) diagnostic_request = "HTTP /play";
++        else if (!strcmp(url, "/stop")) diagnostic_request = "HTTP /stop";
++        else if (!strcmp(url, "/fp-setup2")) diagnostic_request = "HTTP /fp-setup2";
++        else if (!strncmp(url, "/master.m3u8", strlen("/master.m3u8"))) diagnostic_request = "HTTP master playlist";
++    }
++    if (diagnostic_request) logger_log(raop->logger, LOGGER_ERR, "[PROTO] request %s", diagnostic_request);
++
+ #define MAX_HDR_FIELDS 20
+ #define MAX_HDR_FIELD_LEN 64
+ #define MAX_HDR_VALUE_LEN 1024
+@@ -492,5 +510,14 @@
+     http_response_finish(*response, response_data, response_datalen);
+     int len = 0;
+     const char *data = http_response_get_data(*response, &len);
++    if (diagnostic_request && data && len > 0) {
++        char status_line[64] = {0};
++        size_t copy_len = (size_t)len < sizeof(status_line) - 1 ? (size_t)len : sizeof(status_line) - 1;
++        memcpy(status_line, data, copy_len);
++        int status = 0;
++        if (sscanf(status_line, "%*15s %d", &status) == 1) {
++            logger_log(raop->logger, LOGGER_ERR, "[PROTO] response %s status=%d", diagnostic_request, status);
++        }
++    }
+     if (response_data && response_datalen > 0) {
+         len -= response_datalen;
+diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
+--- a/lib/raop_handlers.h
++++ b/lib/raop_handlers.h
+@@ -946,7 +946,8 @@
+             plist_t req_stream_type_node = plist_dict_get_item(req_stream_node, "type");
+             uint64_t type;
+             plist_get_uint_val(req_stream_type_node, &type);
+             logger_log(raop->logger, LOGGER_DEBUG, "type = %llu", type);
++            logger_log(raop->logger, LOGGER_ERR, "[PROTO] SETUP stream type=%llu", (unsigned long long)type);
+ 
+             switch (type) {
+             case 110: {

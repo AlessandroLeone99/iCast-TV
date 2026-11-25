@@ -35,6 +35,14 @@ typedef struct {
 } server_ctx_t;
 
 static void _log_callback(void *cls, int level, const char *msg) {
+    // The tagged protocol messages contain only fixed labels and numeric values.
+    // Forward only those, not arbitrary native logs with possible credentials.
+    if (msg && strncmp(msg, "[PROTO] ", 8) == 0) {
+        auto *ctx = static_cast<server_ctx_t *>(cls);
+        if (ctx && ctx->log) ctx->log->info("%s", msg);
+        else __android_log_print(ANDROID_LOG_INFO, TAG, "%s", msg);
+        return;
+    }
     int prio = ANDROID_LOG_DEBUG;
     if (level <= LOGGER_ERR) prio = ANDROID_LOG_ERROR;
     else if (level == LOGGER_WARNING) prio = ANDROID_LOG_WARN;
@@ -69,7 +77,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     ctx->cb_ctx.raop = ctx->raop;
 
     raop_set_log_level(ctx->raop, LOGGER_ERR);
-    raop_set_log_callback(ctx->raop, _log_callback, NULL);
+    raop_set_log_callback(ctx->raop, _log_callback, ctx);
 
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
     const char *name_c = env->GetStringUTFChars(name, NULL);

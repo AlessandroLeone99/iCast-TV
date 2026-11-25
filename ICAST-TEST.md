@@ -1,4 +1,4 @@
-# iCast TV – Fire OS test 2
+# iCast TV – Fire OS test 3
 
 Experimental variant of jqssun/android-airplay-server 0.0.36. Original LICENSE retained.
 Do not distribute without following upstream and bundled library license obligations.
@@ -21,3 +21,9 @@ Existing installations with a manually saved port retain that setting. Set Serve
 6. Debug signing keys may differ between CI builds: uninstall the old iCast test build before reinstalling if Android reports a signing conflict. Do not uninstall the upstream app solely to resolve signature conflicts; package IDs differ.
 
 Not yet device-tested. DRM, browser-session-bound streams, hardware codec limits and sender restrictions remain. Issues #73, #72, #82, #84 and #91 require independent reproduction and are not claimed fixed.
+
+## Protocol diagnostics (.3)
+- The UI log now records fixed request labels for RTSP SETUP/RECORD/TEARDOWN and HTTP /server-info, /reverse, /play, /stop, /fp-setup2 and HLS requests; it also records numeric response status where available.
+- SETUP stream types (110 = mirroring, 96 = audio) and mirror-running callbacks are logged. Routine polling is omitted to avoid flooding the UI.
+- Raw headers, URLs, payloads, keys and tokens are not included in these new entries. Other preexisting logs may still contain sensitive data.
+- Default receiver name is iCast TV; existing saved settings are unchanged. This diagnostic update does not claim to fix audio-only handover.

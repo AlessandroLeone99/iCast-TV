@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -27,10 +27,21 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
-      - name: Upload private test artifact
+      - name: Upload test artifact
         uses: actions/upload-artifact@v4
         with:
           name: iCast-TV-FireOS-test
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish diagnostic prerelease
+        if: github.ref == 'refs/heads/icast/fireos-test'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
+          cp app/build/outputs/apk/debug/app-debug.apk iCast-TV.apk
+          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (experimental)" --notes "Experimental debug build with filtered AirPlay protocol diagnostics. Not device-tested. See ICAST-TEST.md. Existing debug installs may need uninstalling if signing keys differ."
