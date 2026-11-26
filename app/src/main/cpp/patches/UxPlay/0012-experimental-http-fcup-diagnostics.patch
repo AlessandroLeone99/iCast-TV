@@ -27,7 +27,7 @@ diff --git a/lib/http_handlers.h b/lib/http_handlers.h
 +        http_response_init(response, "HTTP/1.1", 400, "Bad Request");
 +        return;
 +    }
-@@ -585,3 +589,13 @@
+@@ -585,3 +589,14 @@
          int fcup_response_datalen = 0;
  
 +        /* Read only a numeric status. A missing status is not proof of failure. */
@@ -42,7 +42,7 @@ diff --git a/lib/http_handlers.h b/lib/http_handlers.h
 +            uint_val = 0;
 +        }
          if  (logger_debug) {
-@@ -633,3 +647,10 @@
+@@ -633,3 +647,11 @@
          fcup_response_datalen = (int) uint_val;
          char *playlist = NULL;
 +        if (fcup_response_data && (uint_val < 7 || uint_val > 4194304 || memcmp(fcup_response_data, "#EXTM3U", 7))) {
