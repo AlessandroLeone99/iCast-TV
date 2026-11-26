@@ -102,16 +102,16 @@ fun SettingsScreen(viewModel: MainViewModel) {
         )
         SettingChips(
             title = "Profilo User-Agent",
-            description = "Applicato al prossimo video remoto. Standard mantiene il comportamento originale.",
+            description = "Auto usa il profilo standard e prova Safari una volta se la risorsa iniziale risponde 404. Le scelte manuali restano disponibili.",
             value = httpProfile,
-            options = listOf("standard" to "Standard", "safari" to "Safari", "appletv" to "Apple TV"),
+            options = listOf("auto" to "Auto", "standard" to "Standard", "safari" to "Safari", "appletv" to "Apple TV"),
             onValueChange = { viewModel.set(Prefs.HTTP_PROFILE, it) }
         )
         SettingChips(
             title = "Formato video",
-            description = "Rileva usa una richiesta HEAD per riconoscere HLS/DASH senza estensione. Se non basta, prova HLS manualmente.",
+            description = "Auto riconosce HLS/DASH anche dopo un reindirizzamento, senza imporre HLS a tutti i video. Rileva usa invece una richiesta HEAD.",
             value = httpFormat,
-            options = listOf("standard" to "Standard", "detect" to "Rileva", "hls" to "HLS", "dash" to "DASH"),
+            options = listOf("auto" to "Auto", "standard" to "Standard", "detect" to "Rileva (HEAD)", "hls" to "HLS", "dash" to "DASH"),
             onValueChange = { viewModel.set(Prefs.HTTP_FORMAT, it) }
         )
 

@@ -77,8 +77,9 @@ object Prefs {
     val AUTO_START = bool("auto_start", true)
     val AUTO_CHECK_UPDATES = bool("auto_check_updates", true)
     val FCUP_HTTP = bool("fcup_http", false, restart = true)
-    val HTTP_PROFILE = str("http_profile", "standard") { it in setOf("standard", "safari", "appletv") }
-    val HTTP_FORMAT = str("http_format", "standard") { it in setOf("standard", "detect", "hls", "dash") }
+    // New keys migrate legacy forced HLS/Safari selections to automatic once.
+    val HTTP_PROFILE = str("http_profile_v2", "auto") { it in setOf("auto", "standard", "safari", "appletv") }
+    val HTTP_FORMAT = str("http_format_v2", "auto") { it in setOf("auto", "standard", "detect", "hls", "dash") }
     val BOOT_AUTO_START = bool("boot_auto_start", true)
     val RUN_IN_BACKGROUND = bool("run_in_background", true)
     val H265 = tri("h265", restart = true)

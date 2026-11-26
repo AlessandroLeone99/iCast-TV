@@ -30,6 +30,12 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -570,15 +576,52 @@ fun MainScreen(
                         visible = audioOnly && connections > 0 && tab != Tab.OVERVIEW,
                         onClick = { tab = Tab.OVERVIEW }
                     )
-                    NavigationBar {
-                        Tab.entries.forEach { t ->
-                            NavigationBarItem(
-                                selected = tab == t,
-                                onClick = { tab = t },
-                                icon = { Icon(t.icon, null) },
-                                label = { Text(stringResource(t.labelRes)) },
-                                modifier = Modifier.dpadFocus()
-                            )
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+                        Row(
+                            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Tab.entries.forEach { t ->
+                                val active = tab == t
+                                val shape = RoundedCornerShape(14.dp)
+                                val activate = { tab = t }
+                                var confirmDown by remember(t) { mutableStateOf(false) }
+                                Column(
+                                    modifier = Modifier.weight(1f)
+                                        .heightIn(min = 64.dp)
+                                        .clip(shape)
+                                        .dpadFocus(shape)
+                                        .onFocusChanged { if (!it.isFocused) confirmDown = false }
+                                        .onPreviewKeyEvent { event ->
+                                            val confirm = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
+                                            if (!confirm) false
+                                            else {
+                                                if (event.type == KeyEventType.KeyDown) confirmDown = true
+                                                if (event.type == KeyEventType.KeyUp && confirmDown) {
+                                                    confirmDown = false
+                                                    activate()
+                                                }
+                                                true
+                                            }
+                                        }
+                                        .semantics { selected = active }
+                                        .clickable(role = Role.Tab, onClick = activate)
+                                        .padding(vertical = 8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Box(
+                                        Modifier.clip(CircleShape)
+                                            .background(if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                            .padding(horizontal = 18.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(t.icon, null, tint = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Text(stringResource(t.labelRes), style = MaterialTheme.typography.labelMedium,
+                                        color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                         }
                     }
                 }

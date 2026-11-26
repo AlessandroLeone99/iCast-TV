@@ -26,6 +26,7 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.UnrecognizedInputFormatException
 import androidx.media3.common.MimeTypes
 import java.net.HttpURLConnection
 import java.net.URL
@@ -85,6 +86,14 @@ class AirPlayVideoPlayer(private val context: Context) {
     private var lastFailedResource = "unknown"
     private var lastHttpDetails = "origin=unknown"
     private var sourceUri: Uri? = null
+    private var autoProfile = false
+    private var autoFormat = false
+    private var profileSwitched = false
+    private var formatSwitched = false
+    private var observedManifestMime: String? = null
+    private var playbackHttpFactory: DefaultHttpDataSource.Factory? = null
+    private var initialStartMs = 0L
+    private var autoSwitchPending = false
     private var probeTask: Future<*>? = null
     private var sessionId = 0L
     private val probeExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "icast-http-probe").apply { isDaemon = true } }
@@ -216,8 +225,59 @@ class AirPlayVideoPlayer(private val context: Context) {
         }
     }
 
+    private fun manifestMime(uri: Uri, headers: Map<String, List<String>> = emptyMap()): String? {
+        val type = headers.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
+            ?.value?.firstOrNull()?.substringBefore(';')?.trim()?.lowercase(java.util.Locale.ROOT)
+        return when {
+            type?.contains("mpegurl") == true -> MimeTypes.APPLICATION_M3U8
+            type == MimeTypes.APPLICATION_MPD -> MimeTypes.APPLICATION_MPD
+            resourceKind(uri) == "HLS playlist" -> MimeTypes.APPLICATION_M3U8
+            resourceKind(uri) == "DASH manifest" -> MimeTypes.APPLICATION_MPD
+            else -> null
+        }
+    }
+
+    // Rebuild only the original media item, not the receiver or player. This keeps
+    // the AirPlay session, surface and track settings. No credentials/URL changes.
+    private fun tryAutoCompatibility(p: ExoPlayer, error: PlaybackException): Boolean {
+        if (wasReady || autoSwitchPending) return false
+        val item = p.currentMediaItem ?: return false
+        val status = httpStatus(error)
+        val failure = httpFailure(error)
+        val parsing = generateSequence<Throwable>(error) { it.cause }.take(12)
+            .filterIsInstance<UnrecognizedInputFormatException>().firstOrNull()
+        val inferred = if (parsing != null) observedManifestMime ?: manifestMime(parsing.uri) else null
+        val currentMime = item.localConfiguration?.mimeType
+        val changeFormat = autoFormat && !formatSwitched && inferred != null && inferred != currentMime
+        // A single alternate client profile for an initial 404, not authentication
+        // errors or missing segments once playback is underway.
+        val changeProfile = autoProfile && !profileSwitched && status == 404 &&
+            failure?.dataSpec?.uri == sourceUri && playbackHttpFactory != null
+        if (!changeFormat && !changeProfile) return false
+        if (changeFormat) formatSwitched = true
+        if (changeProfile) profileSwitched = true
+        autoSwitchPending = true
+        recoveryInProgress = true
+        recoveryPositionMs = p.currentPosition.takeIf { it > 0 } ?: initialStartMs
+        recoveryDurationMs = 0L
+        val id = sessionId
+        diagnostic("[AUTO] switch profile=${if (changeProfile) "safari" else "unchanged"} format=${if (changeFormat) if (inferred == MimeTypes.APPLICATION_M3U8) "HLS" else "DASH" else "unchanged"}")
+        // Leave the error callback before re-preparing the player.
+        mainHandler.post {
+            if (sessionId == id && player === p) {
+                autoSwitchPending = false
+                if (changeProfile) playbackHttpFactory?.setUserAgent(profileAgent("safari"))
+                val updated = if (changeFormat) item.buildUpon().setMimeType(inferred).build() else item
+                p.setMediaItem(updated, recoveryPositionMs)
+                p.prepare()
+            }
+        }
+        return true
+    }
+
     private fun recoverOrEnd(error: PlaybackException) {
         val p = player ?: return
+        if (autoSwitchPending || tryAutoCompatibility(p, error)) return
         val status = httpStatus(error)
         val missing = status == 404
         val transient = if (status != null) status in setOf(404, 408, 429, 500, 502, 503, 504)
@@ -288,6 +348,13 @@ class AirPlayVideoPlayer(private val context: Context) {
                 if (it == "other" && mediaLoadData.dataType == C.DATA_TYPE_MANIFEST) "manifest"
                 else if (it == "other" && mediaLoadData.dataType == C.DATA_TYPE_MEDIA) "media"
                 else it
+            }
+            // The terminal progressive extractor error is often marked canceled.
+            // It still carries the redirect URI and response headers we need.
+            if (!wasReady && loadEventInfo.dataSpec.uri == sourceUri &&
+                error is UnrecognizedInputFormatException) {
+                observedManifestMime = manifestMime(loadEventInfo.uri, loadEventInfo.responseHeaders)
+                diagnostic("[AUTO] observed manifest=${when(observedManifestMime) { MimeTypes.APPLICATION_M3U8 -> "HLS"; MimeTypes.APPLICATION_MPD -> "DASH"; else -> "unknown" }} redirected=${loadEventInfo.uri != loadEventInfo.dataSpec.uri}")
             }
             if (!wasCanceled) {
                 lastFailedResource = kind
@@ -410,12 +477,15 @@ class AirPlayVideoPlayer(private val context: Context) {
         val remote = origin(uri) == "remote" && uri.scheme in listOf("http", "https")
         val profile = if (remote) requestedProfile else "standard"
         val format = if (remote) requestedFormat else "standard"
+        autoProfile = profile == "auto"
+        autoFormat = format == "auto"
         val agent = profileAgent(profile)
         diagnostic("[COMPAT] profile=$profile format=$format remote=$remote")
         val renderers = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
         val builder = ExoPlayer.Builder(context, renderers)
-        if (agent != null) {
+        if (agent != null || autoProfile) {
             val http = DefaultHttpDataSource.Factory().setUserAgent(agent)
+            playbackHttpFactory = http
             builder.setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)))
         }
         val p = builder.build().also {
@@ -429,6 +499,7 @@ class AirPlayVideoPlayer(private val context: Context) {
             .setPreferredTextLanguage("it")
             .build()
         val startMs = (startPositionSeconds * 1000).toLong().coerceAtLeast(0)
+        initialStartMs = startMs
         val item = MediaItem.Builder().setUri(uri)
         p.playWhenReady = true
         onPlaybackInfo?.invoke(PlaybackSnapshot(startPositionSeconds, 0f, 0f, false, true))
@@ -549,6 +620,14 @@ class AirPlayVideoPlayer(private val context: Context) {
         lastFailedResource = "unknown"
         lastHttpDetails = "origin=unknown"
         sourceUri = null
+        autoProfile = false
+        autoFormat = false
+        profileSwitched = false
+        formatSwitched = false
+        observedManifestMime = null
+        playbackHttpFactory = null
+        initialStartMs = 0L
+        autoSwitchPending = false
         player?.let {
             it.removeListener(_listener)
             it.removeAnalyticsListener(loadDiagnostics)
