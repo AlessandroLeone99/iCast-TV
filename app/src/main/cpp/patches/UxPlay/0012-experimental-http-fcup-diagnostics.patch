@@ -6,11 +6,11 @@ diff --git a/lib/raop.c b/lib/raop.c
      bool hls_support;
 +    bool icast_fcup_http;
      bool hls_pending;
-@@ -650,2 +651,3 @@
+@@ -674,2 +675,3 @@
      raop->hls_support = false;
 +    raop->icast_fcup_http = false;
      raop->hls_pending = false;
-@@ -777,3 +779,5 @@
+@@ -803,3 +805,5 @@
      } else if (strcmp(plist_item, "hls") == 0) {
          raop->hls_support = (value > 0 ? true : false);
 +    } else if (strcmp(plist_item, "icast_fcup_http") == 0) {
@@ -19,15 +19,7 @@ diff --git a/lib/raop.c b/lib/raop.c
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
-@@ -470,2 +470,6 @@
-     airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
--    assert(airplay_video);
-+    if (!airplay_video) {
-+        logger_log(raop->logger, LOGGER_ERR, "[PROTO] FCUP action without active video");
-+        http_response_init(response, "HTTP/1.1", 400, "Bad Request");
-+        return;
-+    }
-@@ -585,3 +589,14 @@
+@@ -586,3 +586,14 @@
          int fcup_response_datalen = 0;
  
 +        /* Read only a numeric status. A missing status is not proof of failure. */
@@ -42,7 +34,7 @@ diff --git a/lib/http_handlers.h b/lib/http_handlers.h
 +            uint_val = 0;
 +        }
          if  (logger_debug) {
-@@ -633,3 +647,11 @@
+@@ -634,3 +645,11 @@
          fcup_response_datalen = (int) uint_val;
          char *playlist = NULL;
 +        if (fcup_response_data && (uint_val < 7 || uint_val > 4194304 || memcmp(fcup_response_data, "#EXTM3U", 7))) {
@@ -54,7 +46,7 @@ diff --git a/lib/http_handlers.h b/lib/http_handlers.h
 +            goto post_action_error;
 +        }
          if (!fcup_response_data) {
-@@ -781,4 +802,13 @@
+@@ -786,4 +805,13 @@
          playback_uuid = _plist_dup_string(req_root_node, "uuid");
          playback_location = _plist_dup_string(req_root_node, "Content-Location");
  
