@@ -71,6 +71,10 @@ class AirPlayVideoPlayer(private val context: Context) {
     private var recoveryPositionMs = 0L
     private var recoveryDurationMs = 0L
     private var wasReady = false
+    private var lastKnownLive = false
+    private var recoveryInProgress = false
+    private var recoveryTargetMs = C.TIME_UNSET
+    private var lastFailedResource = "unknown"
     var onDiagnostic: ((String) -> Unit)? = null
 
     private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
@@ -163,21 +167,42 @@ class AirPlayVideoPlayer(private val context: Context) {
     private fun recoverOrEnd(error: PlaybackException) {
         val p = player ?: return
         val status = httpStatus(error)
-        val transient = if (status != null) status in setOf(408, 429, 500, 502, 503, 504)
+        val missing = status == 404
+        val transient = if (status != null) status in setOf(404, 408, 429, 500, 502, 503, 504)
             else error.errorCode in setOf(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
                 PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)
-        if (transient && recoveryAttempts < 3) {
+        val item = p.currentMediaItem
+        if (transient && item != null && recoveryAttempts < 3) {
             if (recovery != null) return
             recoveryAttempts++
-            recoveryPositionMs = p.currentPosition.coerceAtLeast(0)
-            recoveryDurationMs = p.duration.takeIf { it != C.TIME_UNSET } ?: 0L
-            val waitMs = if (status == 429) 15000L * recoveryAttempts else 2000L * recoveryAttempts
-            diagnostic("[RETRY] attempt=$recoveryAttempts/3 HTTP=${status ?: "-"} delay=${waitMs}ms position=${recoveryPositionMs}ms")
+            val live = lastKnownLive || p.isCurrentMediaItemLive
+            if (!recoveryInProgress) {
+                recoveryPositionMs = p.currentPosition.coerceAtLeast(0)
+                recoveryDurationMs = p.duration.takeIf { it != C.TIME_UNSET } ?: 0L
+                recoveryTargetMs = recoveryPositionMs
+            }
+            // A live playlist may no longer contain the old segment. Re-enter at the
+            // manifest's default live position instead of asking for that segment again.
+            if (missing && live) recoveryTargetMs = C.TIME_UNSET
+            recoveryInProgress = true
+            val waitMs = when (status) {
+                429 -> 15000L * recoveryAttempts
+                404 -> 2000L * recoveryAttempts
+                else -> 2000L * recoveryAttempts
+            }
+            val mode = if (missing) "reload-source" else "prepare"
+            diagnostic("[RETRY] attempt=$recoveryAttempts/3 HTTP=${status ?: "-"} resource=$lastFailedResource mode=$mode live=$live delay=${waitMs}ms position=${recoveryPositionMs}ms")
             val retry = Runnable {
                 recovery = null
                 if (player === p) {
-                    // prepare the existing player: keep its media item, seek position, tracks and playWhenReady.
-                    diagnostic("[RETRY] prepare existing item")
+                    if (missing) {
+                        // Replace the media source, not just retry the failed load.
+                        // Preserve the original URL (including its authentication query),
+                        // playback parameters and track selection. Never invent a new URL.
+                        _subtitleCues.value = emptyList()
+                        diagnostic("[RETRY] reload source target=${if (recoveryTargetMs == C.TIME_UNSET) "live-default" else "${recoveryTargetMs}ms"}")
+                        p.setMediaItem(item, recoveryTargetMs)
+                    }
                     p.prepare()
                 }
             }
@@ -185,13 +210,15 @@ class AirPlayVideoPlayer(private val context: Context) {
             mainHandler.postDelayed(retry, waitMs)
             return
         }
+        recoveryInProgress = false
         val explanation = when (status) {
             401, 403 -> "Accesso rifiutato dal server (HTTP $status). Il link potrebbe essere scaduto. Riavvia il video dal dispositivo sorgente."
-            404, 410 -> "Risorsa video non disponibile (HTTP $status). Riavvia il video dal dispositivo sorgente."
+            404 -> "Risorsa video non disponibile (HTTP 404). Tentativi di recupero: $recoveryAttempts. Riavvia il video dal dispositivo sorgente."
+            410 -> "Risorsa video non disponibile (HTTP 410). Riavvia il video dal dispositivo sorgente."
             null -> "Riproduzione interrotta: ${error.errorCodeName}."
             else -> "Riproduzione interrotta: HTTP $status."
         }
-        diagnostic("[FATAL] HTTP=${status ?: "-"} attempts=$recoveryAttempts position=${p.currentPosition}ms")
+        diagnostic("[FATAL] HTTP=${status ?: "-"} resource=$lastFailedResource attempts=$recoveryAttempts position=${p.currentPosition}ms")
         onFatalError?.invoke(explanation)
         onEnded?.invoke()
     }
@@ -204,7 +231,13 @@ class AirPlayVideoPlayer(private val context: Context) {
             error: IOException,
             wasCanceled: Boolean,
         ) {
-            diagnostic("[LOAD] type=${mediaLoadData.dataType} resource=${resourceKind(loadEventInfo.uri)} HTTP=${httpStatus(error) ?: "-"} elapsed=${loadEventInfo.loadDurationMs}ms bytes=${loadEventInfo.bytesLoaded} canceled=$wasCanceled cause=${describeCause(error)}")
+            val kind = resourceKind(loadEventInfo.uri).let {
+                if (it == "other" && mediaLoadData.dataType == C.DATA_TYPE_MANIFEST) "manifest"
+                else if (it == "other" && mediaLoadData.dataType == C.DATA_TYPE_MEDIA) "media"
+                else it
+            }
+            if (!wasCanceled) lastFailedResource = kind
+            diagnostic("[LOAD] type=${mediaLoadData.dataType} resource=$kind HTTP=${httpStatus(error) ?: "-"} elapsed=${loadEventInfo.loadDurationMs}ms bytes=${loadEventInfo.bytesLoaded} canceled=$wasCanceled cause=${describeCause(error)}")
         }
     }
 
@@ -231,7 +264,11 @@ class AirPlayVideoPlayer(private val context: Context) {
             diagnostic("[STATE] $label position=${player?.currentPosition ?: 0}ms buffered=${player?.bufferedPosition ?: 0}ms")
             if (state == Player.STATE_READY) {
                 wasReady = true
-                if (recoveryAttempts > 0) diagnostic("[RETRY] player READY position=${player?.currentPosition ?: 0}ms")
+                lastKnownLive = player?.isCurrentMediaItemLive == true
+                if (recoveryInProgress) {
+                    recoveryInProgress = false
+                    diagnostic("[RETRY] recovered position=${player?.currentPosition ?: 0}ms live=$lastKnownLive")
+                }
             }
             if (state == Player.STATE_ENDED) onEnded?.invoke()
         }
@@ -296,7 +333,12 @@ class AirPlayVideoPlayer(private val context: Context) {
     }
 
     fun scrub(positionSeconds: Float) = mainHandler.post {
-        player?.seekTo((positionSeconds * 1000).toLong())
+        val target = (positionSeconds * 1000).toLong().coerceAtLeast(0L)
+        if (recovery != null && recoveryTargetMs != C.TIME_UNSET) {
+            recoveryTargetMs = target
+            recoveryPositionMs = target
+        }
+        player?.seekTo(target)
     }
 
     // coalesces the seek spam from drag-seeking
@@ -367,6 +409,10 @@ class AirPlayVideoPlayer(private val context: Context) {
         recoveryPositionMs = 0L
         recoveryDurationMs = 0L
         wasReady = false
+        lastKnownLive = false
+        recoveryInProgress = false
+        recoveryTargetMs = C.TIME_UNSET
+        lastFailedResource = "unknown"
         player?.let {
             it.removeListener(_listener)
             it.removeAnalyticsListener(loadDiagnostics)
@@ -384,7 +430,7 @@ class AirPlayVideoPlayer(private val context: Context) {
 
     private fun _reportPlaybackInfo() {
         val p = player ?: return
-        val recovering = recovery != null
+        val recovering = recoveryInProgress
         val durationMs = if (recovering && recoveryDurationMs > 0) recoveryDurationMs else p.duration
         val position = (if (recovering) recoveryPositionMs else p.currentPosition) / 1000f
         // 0 = live/unknown (TIME_UNSET); a real value only exists for vod
