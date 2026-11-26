@@ -422,6 +422,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val advertiseAudio = prefs[Prefs.ADVERTISE_AUDIO]
         log("[PROTO] advertised video=$advertiseVideo mirroring=$advertiseMirroring audio=$advertiseAudio")
         NativeBridge.nativeSetHlsEnabled(nativeHandle, advertiseVideo)
+        val fcupHttp = prefs[Prefs.FCUP_HTTP]
+        NativeBridge.nativeSetPlist(nativeHandle, "icast_fcup_http", if (fcupHttp) 1 else 0)
+        log("[PROTO] experimental FCUP=$fcupHttp")
         NativeBridge.nativeSetLang(nativeHandle, ConfigurationCompat.getLocales(resources.configuration).toLanguageTags().replace(',', ':'))
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_MIRROR, advertiseMirroring)
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_AUDIO, advertiseAudio)

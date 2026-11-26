@@ -38,6 +38,7 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val serverName by viewModel.pref(Prefs.SERVER_NAME).collectAsState()
+    val fcupHttp by viewModel.pref(Prefs.FCUP_HTTP).collectAsState()
     val httpProfile by viewModel.pref(Prefs.HTTP_PROFILE).collectAsState()
     val httpFormat by viewModel.pref(Prefs.HTTP_FORMAT).collectAsState()
     val h265 by viewModel.pref(Prefs.H265).collectAsState()
@@ -93,6 +94,12 @@ fun SettingsScreen(viewModel: MainViewModel) {
         UpdateSettings(viewModel)
 
         SectionHeader("Compatibilità HTTP")
+        SettingSwitch(
+            title = "FCUP sperimentale",
+            description = "Richiedi al mittente le playlist HLS master compatibili. Richiede il riavvio del ricevitore. Disattiva se il video non parte.",
+            checked = fcupHttp,
+            onCheckedChange = { viewModel.set(Prefs.FCUP_HTTP, it) }
+        )
         SettingChips(
             title = "Profilo User-Agent",
             description = "Applicato al prossimo video remoto. Standard mantiene il comportamento originale.",

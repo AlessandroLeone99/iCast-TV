@@ -31,12 +31,12 @@ index 586f61e..d1de9b8 100644
      /* we only support HLS if the playback location is terminated by "/master.m3u8" */
      const char *uri_suffix = strstr(playback_location, "/master.m3u8");
 -    if (uri_suffix) {
-+    /* A plain http(s) master playlist (e.g. a website video sent from Safari) is fetched by the player
-+       directly, as an Apple TV does. Only other schemes (the YouTube app's) need the sender to relay
-+       the playlists over FCUP, whose prefix rewriting cannot handle relative media URIs. */
 +    bool direct_url = !strncmp(playback_location, "http://", strlen("http://")) ||
 +                      !strncmp(playback_location, "https://", strlen("https://"));
-+    if (uri_suffix && !direct_url) {
++    bool use_fcup = uri_suffix && (!direct_url || (raop->icast_fcup_http && httpd_count_connection_type(raop->httpd, CONNECTION_TYPE_PTTH) == 1));
++    /* Use sender relay only for the already supported master path, explicitly enabled for HTTP. */
++    logger_log(raop->logger, LOGGER_ERR, "[PROTO] PLAY direct=%d master=%d fcup=%d reverse=%d", direct_url, uri_suffix != NULL, use_fcup, httpd_count_connection_type(raop->httpd, CONNECTION_TYPE_PTTH));
++    if (use_fcup) {
          size_t len = strlen(get_uri_local_prefix(airplay_video)) + strlen(uri_suffix);
          char *location = (char *) calloc(len + 1, sizeof(char));
          if (!location) {

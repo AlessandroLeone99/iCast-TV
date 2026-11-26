@@ -1,0 +1,70 @@
+diff --git a/lib/raop.c b/lib/raop.c
+--- a/lib/raop.c
++++ b/lib/raop.c
+@@ -88,3 +88,4 @@
+     /* activate support for HLS live streaming */
+     bool hls_support;
++    bool icast_fcup_http;
+     bool hls_pending;
+@@ -650,2 +651,3 @@
+     raop->hls_support = false;
++    raop->icast_fcup_http = false;
+     raop->hls_pending = false;
+@@ -777,3 +779,5 @@
+     } else if (strcmp(plist_item, "hls") == 0) {
+         raop->hls_support = (value > 0 ? true : false);
++    } else if (strcmp(plist_item, "icast_fcup_http") == 0) {
++        raop->icast_fcup_http = (value > 0);
+     } else {
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -470,2 +470,6 @@
+     airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
+-    assert(airplay_video);
++    if (!airplay_video) {
++        logger_log(raop->logger, LOGGER_ERR, "[PROTO] FCUP action without active video");
++        http_response_init(response, "HTTP/1.1", 400, "Bad Request");
++        return;
++    }
+@@ -585,3 +589,13 @@
+         int fcup_response_datalen = 0;
+ 
++        /* Read only a numeric status. A missing status is not proof of failure. */
++        plist_t status_node = plist_dict_get_item(req_params_node, "FCUP_Response_StatusCode");
++        if (status_node && PLIST_IS_UINT(status_node)) {
++            plist_get_uint_val(status_node, &uint_val);
++            logger_log(raop->logger, LOGGER_ERR, "[PROTO] FCUP response status=%llu", (unsigned long long)uint_val);
++            if (uint_val && (uint_val < 200 || uint_val >= 300)) {
++                logger_log(raop->logger, LOGGER_ERR, "[PROTO] FCUP rejected by sender");
++                goto post_action_error;
++            }
++            uint_val = 0;
++        }
+         if  (logger_debug) {
+@@ -633,3 +647,10 @@
+         fcup_response_datalen = (int) uint_val;
+         char *playlist = NULL;
++        if (fcup_response_data && (uint_val < 7 || uint_val > 4194304 || memcmp(fcup_response_data, "#EXTM3U", 7))) {
++            logger_log(raop->logger, LOGGER_ERR, "[PROTO] FCUP response not a supported playlist");
++            plist_mem_free(fcup_response_url);
++#ifndef PLIST_210
++            plist_mem_free(fcup_response_data);
++#endif
++            goto post_action_error;
++        }
+         if (!fcup_response_data) {
+@@ -781,4 +802,13 @@
+         playback_uuid = _plist_dup_string(req_root_node, "uuid");
+         playback_location = _plist_dup_string(req_root_node, "Content-Location");
+ 
++        /* Only log known field presence, never values or arbitrary key names. */
++        if (req_root_node && PLIST_IS_DICT(req_root_node)) {
++            logger_log(raop->logger, LOGGER_ERR,
++                       "[PROTO] PLAY fields count=%u headers=%d httpHeaders=%d options=%d",
++                       (unsigned)plist_dict_get_size(req_root_node),
++                       plist_dict_get_item(req_root_node, "headers") != NULL,
++                       plist_dict_get_item(req_root_node, "HTTPHeaders") != NULL,
++                       plist_dict_get_item(req_root_node, "options") != NULL);
++        }
+         plist_t req_client_proc_name_node = plist_dict_get_item(req_root_node, "clientProcName");
