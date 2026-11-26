@@ -96,4 +96,4 @@ jobs:
         run: |
           set -eu
           version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
-          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (ARM32)" --notes "Signed ARM32 build: HTTP request origin, initial resource, range and response-type diagnostics, bounded 404 recovery. No raw URLs or credentials in new diagnostics. Not device-tested."
+          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (ARM32)" --notes "Signed ARM32 build: opt-in HTTP user-agent profiles and HLS/DASH format selection with optional HEAD detection. Standard playback preserved. No cookie forwarding or fabricated referer. Not device-tested."

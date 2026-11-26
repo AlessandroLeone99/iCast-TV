@@ -60,3 +60,9 @@ Not yet device-tested. DRM, browser-session-bound streams, hardware codec limits
 ## HTTP origin diagnostics (.9)
 - [HTTP] and [HTTP-FINAL] record the requested origin category (loopback/LAN/remote), whether the request matches the original media URI, byte range/offset and a classified response content type. The observed URI can differ from the requested URI on redirects, but absence of an observed redirect does not prove there was none on failed opens. No raw URLs or headers in these new logs.
 - No speculative URL rewriting or request header changes; no additional retry attempts. Determine whether the failing request is the initial media resource, a downstream segment or local proxy request before making a protocol change.
+
+## HTTP compatibility (.10)
+- Settings > Compatibilità HTTP: Standard (default), Safari and Apple TV user-agent profiles; applies only to the next remote HTTP(S) video, not local proxy or mirroring. These are compatibility strings, not authorization credentials.
+- Video format: Standard (default), Rileva (optional bounded HEAD probe for extensionless/unknown remote resources), HLS or DASH (explicit MediaItem MIME). HEAD may return different results from GET; no redirect following in probe and unknown results fall back to standard. Forced format should only be selected for a known matching stream.
+- No automatic cookie/authorization forwarding or invented referer: the existing AirPlay callback only delivers URL and position and the inspected protocol examples do not establish a safe media-header field. HTTP playback still requires a valid authorized URL. No authentication or DRM bypass.
+- Test standard regression, alternate UA on a valid server that negotiates by UA, extensionless HLS/DASH, HEAD failure fallback, cancellation/new play, and Fire OS 6 update. [COMPAT] and [PROBE] contain fixed labels/status only. Not device-tested.

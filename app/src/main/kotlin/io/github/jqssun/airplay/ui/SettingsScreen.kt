@@ -38,6 +38,8 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val serverName by viewModel.pref(Prefs.SERVER_NAME).collectAsState()
+    val httpProfile by viewModel.pref(Prefs.HTTP_PROFILE).collectAsState()
+    val httpFormat by viewModel.pref(Prefs.HTTP_FORMAT).collectAsState()
     val h265 by viewModel.pref(Prefs.H265).collectAsState()
     val enforceSdr by viewModel.pref(Prefs.ENFORCE_SDR).collectAsState()
     val alacEnabled by viewModel.pref(Prefs.ALAC_ENABLED).collectAsState()
@@ -89,6 +91,22 @@ fun SettingsScreen(viewModel: MainViewModel) {
     ) {
         SectionHeader("Aggiornamenti iCast TV")
         UpdateSettings(viewModel)
+
+        SectionHeader("Compatibilità HTTP")
+        SettingChips(
+            title = "Profilo User-Agent",
+            description = "Applicato al prossimo video remoto. Standard mantiene il comportamento originale.",
+            value = httpProfile,
+            options = listOf("standard" to "Standard", "safari" to "Safari", "appletv" to "Apple TV"),
+            onValueChange = { viewModel.set(Prefs.HTTP_PROFILE, it) }
+        )
+        SettingChips(
+            title = "Formato video",
+            description = "Rileva usa una richiesta HEAD per riconoscere HLS/DASH senza estensione. Se non basta, prova HLS manualmente.",
+            value = httpFormat,
+            options = listOf("standard" to "Standard", "detect" to "Rileva", "hls" to "HLS", "dash" to "DASH"),
+            onValueChange = { viewModel.set(Prefs.HTTP_FORMAT, it) }
+        )
 
         SectionHeader(stringResource(R.string.section_server))
 

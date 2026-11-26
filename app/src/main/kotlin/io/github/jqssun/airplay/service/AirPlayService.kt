@@ -667,7 +667,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _videoPlaybackSize.value = null
         _videoTitle.value = ""
         _videoPlaybackActive.value = true
-        airPlayVideoPlayer.play(location, startPositionSeconds)
+        airPlayVideoPlayer.play(location, startPositionSeconds, prefs[Prefs.HTTP_PROFILE], prefs[Prefs.HTTP_FORMAT])
         // claim media-button routing for keys that arrive as media-session events
         mediaSession?.isActive = true
         log("AirPlay Video play @ ${startPositionSeconds}s")

@@ -76,6 +76,8 @@ object Prefs {
     val SERVER_PORT = int("server_port", 7200, 1..65535, restart = true)
     val AUTO_START = bool("auto_start", true)
     val AUTO_CHECK_UPDATES = bool("auto_check_updates", true)
+    val HTTP_PROFILE = str("http_profile", "standard") { it in setOf("standard", "safari", "appletv") }
+    val HTTP_FORMAT = str("http_format", "standard") { it in setOf("standard", "detect", "hls", "dash") }
     val BOOT_AUTO_START = bool("boot_auto_start", true)
     val RUN_IN_BACKGROUND = bool("run_in_background", true)
     val H265 = tri("h265", restart = true)

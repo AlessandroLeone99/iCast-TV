@@ -23,6 +23,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.common.MimeTypes
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.LoadEventInfo
@@ -77,6 +85,9 @@ class AirPlayVideoPlayer(private val context: Context) {
     private var lastFailedResource = "unknown"
     private var lastHttpDetails = "origin=unknown"
     private var sourceUri: Uri? = null
+    private var probeTask: Future<*>? = null
+    private var sessionId = 0L
+    private val probeExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "icast-http-probe").apply { isDaemon = true } }
     var onDiagnostic: ((String) -> Unit)? = null
 
     private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
@@ -349,7 +360,42 @@ class AirPlayVideoPlayer(private val context: Context) {
         }
     }
 
-    fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
+    private fun profileAgent(profile: String): String? = when (profile) {
+        "safari" -> "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        "appletv" -> "AppleCoreMedia/1.0.0 (Apple TV; U; CPU OS 18_0 like Mac OS X; en_us)"
+        else -> null
+    }
+
+    // A best-effort HEAD probe, only on explicit opt-in, remote HTTP(S) streams
+    // without a recognized manifest suffix. No body download, cookies, or guessed
+    // referer. Do not follow redirects in this diagnostic probe.
+    private fun detectMime(uri: Uri, agent: String?): Pair<String?, String> {
+        var connection: HttpURLConnection? = null
+        return try {
+            val c = URL(uri.toString()).openConnection() as HttpURLConnection
+            connection = c
+            c.requestMethod = "HEAD"
+            c.instanceFollowRedirects = false
+            c.connectTimeout = 4000
+            c.readTimeout = 4000
+            c.useCaches = false
+            agent?.let { c.setRequestProperty("User-Agent", it) }
+            val status = c.responseCode
+            val type = c.contentType?.substringBefore(';')?.trim()?.lowercase(java.util.Locale.ROOT)
+            val mime = if (status in 200..299) when (type) {
+                "application/vnd.apple.mpegurl", "application/x-mpegurl", "audio/mpegurl", "audio/x-mpegurl" -> MimeTypes.APPLICATION_M3U8
+                "application/dash+xml" -> MimeTypes.APPLICATION_MPD
+                else -> null
+            } else null
+            mime to "status=$status detected=${when(mime) { MimeTypes.APPLICATION_M3U8 -> "HLS"; MimeTypes.APPLICATION_MPD -> "DASH"; else -> "unknown" }}"
+        } catch (e: Exception) {
+            null to "failed=${e.javaClass.simpleName}"
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    fun play(location: String, startPositionSeconds: Float, requestedProfile: String = "standard", requestedFormat: String = "standard") = mainHandler.post {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
         val uri = Uri.parse(location)
@@ -361,8 +407,18 @@ class AirPlayVideoPlayer(private val context: Context) {
         }
         val local = uri.host == "localhost" || uri.host == "127.0.0.1" || uri.host == "::1"
         diagnostic("[VIDEO] $scheme local=$local origin=${origin(uri)} resource=${resourceKind(uri)} start=${startPositionSeconds}s")
+        val remote = origin(uri) == "remote" && uri.scheme in listOf("http", "https")
+        val profile = if (remote) requestedProfile else "standard"
+        val format = if (remote) requestedFormat else "standard"
+        val agent = profileAgent(profile)
+        diagnostic("[COMPAT] profile=$profile format=$format remote=$remote")
         val renderers = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
-        val p = ExoPlayer.Builder(context, renderers).build().also {
+        val builder = ExoPlayer.Builder(context, renderers)
+        if (agent != null) {
+            val http = DefaultHttpDataSource.Factory().setUserAgent(agent)
+            builder.setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)))
+        }
+        val p = builder.build().also {
             it.addListener(_listener)
             it.addAnalyticsListener(loadDiagnostics)
             pendingSurface?.let { s -> it.setVideoSurface(s) }
@@ -372,11 +428,39 @@ class AirPlayVideoPlayer(private val context: Context) {
         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
             .setPreferredTextLanguage("it")
             .build()
-        p.setMediaItem(MediaItem.fromUri(location), (startPositionSeconds * 1000).toLong())
+        val startMs = (startPositionSeconds * 1000).toLong().coerceAtLeast(0)
+        val item = MediaItem.Builder().setUri(uri)
         p.playWhenReady = true
-        p.prepare()
         onPlaybackInfo?.invoke(PlaybackSnapshot(startPositionSeconds, 0f, 0f, false, true))
-        mainHandler.postDelayed(_reportTick, REPORT_INTERVAL_MS)
+        fun start(mime: String?) {
+            if (player !== p) return
+            if (mime != null) item.setMimeType(mime)
+            p.setMediaItem(item.build(), startMs)
+            p.prepare()
+            mainHandler.postDelayed(_reportTick, REPORT_INTERVAL_MS)
+        }
+        when (format) {
+            "hls" -> start(MimeTypes.APPLICATION_M3U8)
+            "dash" -> start(MimeTypes.APPLICATION_MPD)
+            "detect" -> {
+                if (resourceKind(uri) in setOf("HLS playlist", "DASH manifest", "MP4")) {
+                    start(null)
+                } else {
+                    val id = sessionId
+                    probeTask = probeExecutor.submit {
+                        val (mime, details) = detectMime(uri, agent)
+                        mainHandler.post {
+                            if (sessionId == id && player === p) {
+                                probeTask = null
+                                diagnostic("[PROBE] $details")
+                                start(mime)
+                            }
+                        }
+                    }
+                }
+            }
+            else -> start(null)
+        }
     }
 
     fun scrub(positionSeconds: Float) = mainHandler.post {
@@ -450,6 +534,9 @@ class AirPlayVideoPlayer(private val context: Context) {
 
     private fun _stopInternal(reportStopped: Boolean) {
         mainHandler.removeCallbacks(_reportTick)
+        sessionId++
+        probeTask?.cancel(true)
+        probeTask = null
         recovery?.let { mainHandler.removeCallbacks(it) }
         recovery = null
         recoveryAttempts = 0
