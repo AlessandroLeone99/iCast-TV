@@ -96,4 +96,4 @@ jobs:
         run: |
           set -eu
           version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
-          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (ARM32)" --notes "Signed ARM32 build: HTTP 404 recovery by reloading the media source, VOD resume and live-default recovery, persistent diagnostics, captions and in-app updates. Up to three attempts per session. Not device-tested."
+          gh release create "v$version" iCast-TV.apk --target "$GITHUB_SHA" --prerelease --title "iCast TV $version (ARM32)" --notes "Signed ARM32 build: HTTP request origin, initial resource, range and response-type diagnostics, bounded 404 recovery. No raw URLs or credentials in new diagnostics. Not device-tested."

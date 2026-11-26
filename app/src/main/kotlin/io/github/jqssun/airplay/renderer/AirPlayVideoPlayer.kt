@@ -75,6 +75,8 @@ class AirPlayVideoPlayer(private val context: Context) {
     private var recoveryInProgress = false
     private var recoveryTargetMs = C.TIME_UNSET
     private var lastFailedResource = "unknown"
+    private var lastHttpDetails = "origin=unknown"
+    private var sourceUri: Uri? = null
     var onDiagnostic: ((String) -> Unit)? = null
 
     private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
@@ -148,9 +150,48 @@ class AirPlayVideoPlayer(private val context: Context) {
             }
     }
 
-    private fun httpStatus(error: Throwable): Int? =
+    private fun httpFailure(error: Throwable): HttpDataSource.InvalidResponseCodeException? =
         generateSequence(error) { it.cause }.take(12)
-            .filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()?.responseCode
+            .filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
+
+    private fun httpStatus(error: Throwable): Int? = httpFailure(error)?.responseCode
+
+    private fun origin(uri: Uri): String {
+        val host = uri.host?.lowercase(java.util.Locale.ROOT)?.trim('[', ']') ?: return "unknown"
+        return when {
+            host == "localhost" || host.startsWith("127.") || host == "::1" -> "loopback"
+            host.startsWith("192.168.") || host.startsWith("10.") ||
+                Regex("""172\.(1[6-9]|2[0-9]|3[01])\..*""").matches(host) ||
+                host.endsWith(".local") -> "LAN"
+            else -> "remote"
+        }
+    }
+
+    // Only fixed labels, booleans and offsets: no header values, URL paths, query
+    // strings, response bodies, or site names. A failed request can redirect before
+    // returning a status; the exception retains the requested URI, not always the
+    // final response URI.
+    private fun httpDetails(error: Throwable, reportedUri: Uri): String {
+        val failure = httpFailure(error) ?: return "origin=${origin(reportedUri)}"
+        val spec = failure.dataSpec
+        val requested = spec.uri
+        val headers = failure.headerFields
+        val mime = headers.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
+            ?.value?.firstOrNull()?.substringBefore(';')?.trim()?.lowercase(java.util.Locale.ROOT)
+        val content = when {
+            mime == null -> "unknown"
+            mime.contains("mpegurl") -> "HLS"
+            mime == "application/dash+xml" -> "DASH"
+            mime.startsWith("video/") || mime.startsWith("audio/") -> "media"
+            mime == "text/html" -> "html"
+            mime == "application/json" -> "json"
+            mime.startsWith("text/") -> "text"
+            else -> "other"
+        }
+        val range = spec.position > 0 || spec.length != C.LENGTH_UNSET.toLong()
+        return "origin=${origin(requested)} observed=${origin(reportedUri)} initial=${requested == sourceUri} " +
+            "redirectObserved=${reportedUri != requested} range=$range offset=${spec.position} response=$content"
+    }
 
     private fun resourceKind(uri: Uri): String {
         val path = uri.path.orEmpty().lowercase(java.util.Locale.ROOT)
@@ -219,6 +260,7 @@ class AirPlayVideoPlayer(private val context: Context) {
             else -> "Riproduzione interrotta: HTTP $status."
         }
         diagnostic("[FATAL] HTTP=${status ?: "-"} resource=$lastFailedResource attempts=$recoveryAttempts position=${p.currentPosition}ms")
+        if (status != null) diagnostic("[HTTP-FINAL] $lastHttpDetails")
         onFatalError?.invoke(explanation)
         onEnded?.invoke()
     }
@@ -236,7 +278,11 @@ class AirPlayVideoPlayer(private val context: Context) {
                 else if (it == "other" && mediaLoadData.dataType == C.DATA_TYPE_MEDIA) "media"
                 else it
             }
-            if (!wasCanceled) lastFailedResource = kind
+            if (!wasCanceled) {
+                lastFailedResource = kind
+                lastHttpDetails = httpDetails(error, loadEventInfo.uri)
+            }
+            if (httpStatus(error) != null) diagnostic("[HTTP] status=${httpStatus(error)} ${httpDetails(error, loadEventInfo.uri)}")
             diagnostic("[LOAD] type=${mediaLoadData.dataType} resource=$kind HTTP=${httpStatus(error) ?: "-"} elapsed=${loadEventInfo.loadDurationMs}ms bytes=${loadEventInfo.bytesLoaded} canceled=$wasCanceled cause=${describeCause(error)}")
         }
     }
@@ -307,13 +353,14 @@ class AirPlayVideoPlayer(private val context: Context) {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
         val uri = Uri.parse(location)
+        sourceUri = uri
         val scheme = when (uri.scheme) {
             "http" -> "HTTP"
             "https" -> "HTTPS"
             else -> "other"
         }
         val local = uri.host == "localhost" || uri.host == "127.0.0.1" || uri.host == "::1"
-        diagnostic("[VIDEO] $scheme local=$local start=${startPositionSeconds}s")
+        diagnostic("[VIDEO] $scheme local=$local origin=${origin(uri)} resource=${resourceKind(uri)} start=${startPositionSeconds}s")
         val renderers = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
         val p = ExoPlayer.Builder(context, renderers).build().also {
             it.addListener(_listener)
@@ -413,6 +460,8 @@ class AirPlayVideoPlayer(private val context: Context) {
         recoveryInProgress = false
         recoveryTargetMs = C.TIME_UNSET
         lastFailedResource = "unknown"
+        lastHttpDetails = "origin=unknown"
+        sourceUri = null
         player?.let {
             it.removeListener(_listener)
             it.removeAnalyticsListener(loadDiagnostics)
