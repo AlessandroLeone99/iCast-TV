@@ -45,3 +45,9 @@ Not yet device-tested. DRM, browser-session-bound streams, hardware codec limits
 - CI requires the repository Actions secret ICAST_SIGNING_JSON containing the PKCS12 keystore and password. Never commit or share that secret. The pinned public certificate SHA-256 is 0d2358cf22e2af9f42eb8cc3c7d61c650937bda9e049edf56f42cc92def1e707. No fallback to random debug signing is published.
 - Migration from previous ephemeral debug signing may require uninstalling iCast once; this clears its local settings/logs. Export logs first. Future updates signed with the same key can preserve data. Keep a private backup of the secret.
 - Validate on Fire OS 6: manual and startup checks, no update, available update, failed network, cancel, installer confirmation, same-key update, settings retained. No on-device verification yet.
+
+## HTTP failure diagnostics (.7)
+- The service writes to a shared persistent log independently of the Activity; existing logs are retained. The UI observes the same bounded log and exports a snapshot.
+- HTTP load errors report the numeric status, resource type, byte count and exception classes without URLs or credentials. Native errors report only broad categories; no raw messages exported.
+- Up to three additional player prepare attempts per session for HTTP 408/429/500/502/503/504 and network connection/timeout errors; no automatic recovery for 401/403/404/410. Media3 retains the media item/position and selection where possible. Live streams and expired URLs may still need restart from sender.
+- Test on Fire OS 6: transient HTTP 503 then 200; terminal HTTP 403; log export with Activity destroyed; stop/new stream cancels recovery; update .6 to .7; subtitle and mirroring regressions. Not yet device-tested.

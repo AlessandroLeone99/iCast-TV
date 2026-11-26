@@ -65,6 +65,12 @@ class AirPlayVideoPlayer(private val context: Context) {
     var onVideoSize: ((width: Int, height: Int, aspect: Float) -> Unit)? = null
     var onTitle: ((String?) -> Unit)? = null
     var onEnded: (() -> Unit)? = null
+    var onFatalError: ((String) -> Unit)? = null
+    private var recoveryAttempts = 0
+    private var recovery: Runnable? = null
+    private var recoveryPositionMs = 0L
+    private var recoveryDurationMs = 0L
+    private var wasReady = false
     var onDiagnostic: ((String) -> Unit)? = null
 
     private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
@@ -138,6 +144,58 @@ class AirPlayVideoPlayer(private val context: Context) {
             }
     }
 
+    private fun httpStatus(error: Throwable): Int? =
+        generateSequence(error) { it.cause }.take(12)
+            .filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()?.responseCode
+
+    private fun resourceKind(uri: Uri): String {
+        val path = uri.path.orEmpty().lowercase(java.util.Locale.ROOT)
+        return when {
+            path.endsWith(".m3u8") -> "HLS playlist"
+            path.endsWith(".mpd") -> "DASH manifest"
+            path.endsWith(".ts") || path.endsWith(".m4s") || path.endsWith(".aac") -> "media segment"
+            path.endsWith(".vtt") -> "subtitle"
+            path.endsWith(".mp4") -> "MP4"
+            else -> "other"
+        }
+    }
+
+    private fun recoverOrEnd(error: PlaybackException) {
+        val p = player ?: return
+        val status = httpStatus(error)
+        val transient = if (status != null) status in setOf(408, 429, 500, 502, 503, 504)
+            else error.errorCode in setOf(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)
+        if (transient && recoveryAttempts < 3) {
+            if (recovery != null) return
+            recoveryAttempts++
+            recoveryPositionMs = p.currentPosition.coerceAtLeast(0)
+            recoveryDurationMs = p.duration.takeIf { it != C.TIME_UNSET } ?: 0L
+            val waitMs = if (status == 429) 15000L * recoveryAttempts else 2000L * recoveryAttempts
+            diagnostic("[RETRY] attempt=$recoveryAttempts/3 HTTP=${status ?: "-"} delay=${waitMs}ms position=${recoveryPositionMs}ms")
+            val retry = Runnable {
+                recovery = null
+                if (player === p) {
+                    // prepare the existing player: keep its media item, seek position, tracks and playWhenReady.
+                    diagnostic("[RETRY] prepare existing item")
+                    p.prepare()
+                }
+            }
+            recovery = retry
+            mainHandler.postDelayed(retry, waitMs)
+            return
+        }
+        val explanation = when (status) {
+            401, 403 -> "Accesso rifiutato dal server (HTTP $status). Il link potrebbe essere scaduto. Riavvia il video dal dispositivo sorgente."
+            404, 410 -> "Risorsa video non disponibile (HTTP $status). Riavvia il video dal dispositivo sorgente."
+            null -> "Riproduzione interrotta: ${error.errorCodeName}."
+            else -> "Riproduzione interrotta: HTTP $status."
+        }
+        diagnostic("[FATAL] HTTP=${status ?: "-"} attempts=$recoveryAttempts position=${p.currentPosition}ms")
+        onFatalError?.invoke(explanation)
+        onEnded?.invoke()
+    }
+
     private val loadDiagnostics = object : AnalyticsListener {
         override fun onLoadError(
             eventTime: AnalyticsListener.EventTime,
@@ -146,7 +204,7 @@ class AirPlayVideoPlayer(private val context: Context) {
             error: IOException,
             wasCanceled: Boolean,
         ) {
-            diagnostic("[LOAD] type=${mediaLoadData.dataType} elapsed=${loadEventInfo.loadDurationMs}ms bytes=${loadEventInfo.bytesLoaded} canceled=$wasCanceled cause=${describeCause(error)}")
+            diagnostic("[LOAD] type=${mediaLoadData.dataType} resource=${resourceKind(loadEventInfo.uri)} HTTP=${httpStatus(error) ?: "-"} elapsed=${loadEventInfo.loadDurationMs}ms bytes=${loadEventInfo.bytesLoaded} canceled=$wasCanceled cause=${describeCause(error)}")
         }
     }
 
@@ -160,7 +218,7 @@ class AirPlayVideoPlayer(private val context: Context) {
     private val _listener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
             diagnostic("[ERROR] ${error.errorCodeName} (${error.errorCode}) cause=${describeCause(error)}")
-            onEnded?.invoke()
+            recoverOrEnd(error)
         }
         override fun onPlaybackStateChanged(state: Int) {
             val label = when (state) {
@@ -171,6 +229,10 @@ class AirPlayVideoPlayer(private val context: Context) {
                 else -> state.toString()
             }
             diagnostic("[STATE] $label position=${player?.currentPosition ?: 0}ms buffered=${player?.bufferedPosition ?: 0}ms")
+            if (state == Player.STATE_READY) {
+                wasReady = true
+                if (recoveryAttempts > 0) diagnostic("[RETRY] player READY position=${player?.currentPosition ?: 0}ms")
+            }
             if (state == Player.STATE_ENDED) onEnded?.invoke()
         }
         override fun onTracksChanged(tracks: Tracks) {
@@ -299,6 +361,12 @@ class AirPlayVideoPlayer(private val context: Context) {
 
     private fun _stopInternal(reportStopped: Boolean) {
         mainHandler.removeCallbacks(_reportTick)
+        recovery?.let { mainHandler.removeCallbacks(it) }
+        recovery = null
+        recoveryAttempts = 0
+        recoveryPositionMs = 0L
+        recoveryDurationMs = 0L
+        wasReady = false
         player?.let {
             it.removeListener(_listener)
             it.removeAnalyticsListener(loadDiagnostics)
@@ -316,13 +384,14 @@ class AirPlayVideoPlayer(private val context: Context) {
 
     private fun _reportPlaybackInfo() {
         val p = player ?: return
-        val durationMs = p.duration
-        val position = p.currentPosition / 1000f
+        val recovering = recovery != null
+        val durationMs = if (recovering && recoveryDurationMs > 0) recoveryDurationMs else p.duration
+        val position = (if (recovering) recoveryPositionMs else p.currentPosition) / 1000f
         // 0 = live/unknown (TIME_UNSET); a real value only exists for vod
         val duration = if (durationMs == C.TIME_UNSET) 0f else durationMs / 1000f
         val rate = if (p.playWhenReady && p.playbackState == Player.STATE_READY) p.playbackParameters.speed else 0f
         // readyToPlay = the timeline is established, NOT exoplayer's buffering state: for vod that means the duration is known; for live there is no duration so being playable is enough. the sender holds its timeline (and /play) until this, so it must not go true early
-        val ready = if (p.isCurrentMediaItemLive) p.playbackState == Player.STATE_READY
+        val ready = if (recovering) wasReady else if (p.isCurrentMediaItemLive) p.playbackState == Player.STATE_READY
                     else durationMs != C.TIME_UNSET
         onPlaybackInfo?.invoke(
             PlaybackSnapshot(
@@ -333,7 +402,7 @@ class AirPlayVideoPlayer(private val context: Context) {
                 playWhenReady = p.playWhenReady,
                 speed = p.playbackParameters.speed,
                 skipSilence = p.skipSilenceEnabled,
-                buffering = p.playbackState == Player.STATE_BUFFERING,
+                buffering = recovering || p.playbackState == Player.STATE_BUFFERING,
             )
         )
     }

@@ -105,6 +105,22 @@ fun MainScreen(
     val videoSessionPending by viewModel.videoSessionPending.collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
+    val videoError by viewModel.videoError.collectAsState()
+    if (!isInPip && !videoPlaybackActive && videoError != null) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissVideoError,
+            title = { Text("Errore di riproduzione") },
+            text = { Text(videoError.orEmpty()) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.dismissVideoError(); tab = Tab.LOGS }, modifier = Modifier.dpadFocus()) {
+                    Text("Mostra log")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissVideoError, modifier = Modifier.dpadFocus()) { Text("Chiudi") }
+            }
+        )
+    }
 
     // don't use movableContentOf: moving AndroidView across subcomposition boundaries makes it crash on reparent
     val video: @Composable () -> Unit = {

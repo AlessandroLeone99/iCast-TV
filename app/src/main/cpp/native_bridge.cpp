@@ -43,6 +43,16 @@ static void _log_callback(void *cls, int level, const char *msg) {
         else __android_log_print(ANDROID_LOG_INFO, TAG, "%s", msg);
         return;
     }
+    // Do not forward arbitrary native strings: request URLs and headers may contain secrets.
+    if (msg && level <= LOGGER_ERR) {
+        auto *ctx = static_cast<server_ctx_t *>(cls);
+        const char *category = "other";
+        if (strstr(msg, "playlist") || strstr(msg, "Playlist")) category = "playlist";
+        else if (strstr(msg, "HTTP") || strstr(msg, "http")) category = "HTTP";
+        else if (strstr(msg, "FCUP") || strstr(msg, "fcup")) category = "FCUP";
+        else if (strstr(msg, "connection") || strstr(msg, "Connection")) category = "connection";
+        if (ctx && ctx->log) ctx->log->error("[NATIVE] error category=%s", category);
+    }
     int prio = ANDROID_LOG_DEBUG;
     if (level <= LOGGER_ERR) prio = ANDROID_LOG_ERROR;
     else if (level == LOGGER_WARNING) prio = ANDROID_LOG_WARN;

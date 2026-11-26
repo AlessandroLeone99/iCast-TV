@@ -187,7 +187,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private var _clientVolSteps = 0
     private val _clientVolTimeout = Runnable { _clientVolDriveEnd() }
 
-    var logCallback: ((String) -> Unit)? = null
+    private val _videoError = MutableStateFlow<String?>(null)
+    val videoError = _videoError.asStateFlow()
+    fun dismissVideoError() { _videoError.value = null }
 
     @Volatile private var _lastPin: String? = null
     var pinCallback: ((String?) -> Unit)? = null
@@ -198,12 +200,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private fun log(msg: String) {
         Log.i(TAG, msg)
-        logCallback?.invoke(msg)
+        io.github.jqssun.airplay.diagnostics.AppLog.add(this, msg)
     }
 
     // Native diagnostics may include signed URLs. Strip them from the UI/export.
     override fun onLog(msg: String) {
-        logCallback?.invoke(msg.replace(Regex("(?i)https?://[^\\s]+"), "[URL omitted]"))
+        io.github.jqssun.airplay.diagnostics.AppLog.add(this, msg)
     }
 
     inner class LocalBinder : Binder() {
@@ -312,6 +314,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         }
         airPlayVideoPlayer.onTitle = { _videoTitle.value = it ?: "" }
         airPlayVideoPlayer.onDiagnostic = { message -> log(message) }
+        airPlayVideoPlayer.onFatalError = { _videoError.value = it }
         airPlayVideoPlayer.onEnded = { _endVideoPlayback("AirPlay Video stopped (player)") }
         airPlayVideoPlayer.onPlaybackInfo = { snapshot ->
             if (nativeHandle != 0L) {
@@ -410,7 +413,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoRenderer.keyAllowFrameDrop = prefs[Prefs.KEY_ALLOW_FRAME_DROP]
         videoRenderer.selector.maxOperatingRate = Prefs.forced(prefs[Prefs.OPERATING_RATE])
         videoRenderer.benchmarkLog = prefs[Prefs.BENCHMARK_LOG]
-        videoRenderer.benchmarkLogCallback = { msg -> logCallback?.invoke(msg) }
+        videoRenderer.benchmarkLogCallback = { msg -> io.github.jqssun.airplay.diagnostics.AppLog.add(this, msg) }
         videoRenderer.scheduledOutputBufferRelease = prefs[Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE]
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
@@ -623,7 +626,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _videoPlaybackActive.value = false
         airPlayVideoPlayer.stop()
         if (!_audioOnly.value) mediaSession?.isActive = false
-        log(message)
+        log("$message [STOP] position=${_videoPlaybackInfo.value.positionMs}ms duration=${_videoPlaybackInfo.value.durationMs}ms")
     }
 
     override fun onDestroy() {
@@ -655,6 +658,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onVideoPlay(location: String, startPositionSeconds: Float) {
+        _videoError.value = null
         _videoLocation.value = location
         _videoPlaySeq.value++
         _videoPollSuppressed = false
